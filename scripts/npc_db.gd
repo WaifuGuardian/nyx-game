@@ -3,21 +3,38 @@ class_name NpcDB
 const DEFS: Dictionary = {
 	"elder": {
 		"name": "Elder Mira",
-		"color": Color(0.75, 0.095, 0.685, 1.0),
+		"color": Color(0.55, 0.8, 0.9),
 		"face": "res://art/faces/elder.png",
-		"dialogue": [
-			"Nyx... so the stories were true. You fled north.",
-			"The woods will hide you for now, child. But the dark in those hills is older than this town.",
-			"Go carefully. And come back alive — you are the most interesting thing to happen here in years.",
-		],
+		"root": {
+			"text": "Nyx. I wondered when you'd climb my stairs.",
+			"options": [
+				{"label": "Flirt", "effect": "flirt"},
+				{"label": "Ask about the woods", "effect": "lines",
+					"lines": [
+						"The dark in those hills is older than this town, child.",
+						"The bells ring when the woods move. Lately, they ring at night.",
+					], "then": "root"},
+				{"label": "Ask for work", "effect": "quest_stub"},
+				{"label": "Leave", "effect": "end"},
+			],
+		},
 	},
 	"shopkeep": {
 		"name": "Bram the Trader",
-		"color": Color(0.992, 0.659, 0.054, 1.0),
+		"color": Color(0.9, 0.7, 0.4),
 		"face": "res://art/faces/bram.png",
-		"dialogue": [
-			"Steel, potions, supplies. If you've coin, I've goods.",
-		],
+		"root": {
+			"text": "Steel, potions, supplies. If you've coin, I've goods.",
+			"options": [
+				{"label": "Trade", "effect": "shop"},
+				{"label": "Ask about the road", "effect": "lines",
+					"lines": [
+						"Roads are fine by day. By night, the woods walk.",
+						"Something's been eating my caravans. Buy a sword — you'll understand.",
+					], "then": "root"},
+				{"label": "Leave", "effect": "end"},
+			],
+		},
 		"stock": [
 			{"id": "potion", "quality": 2, "count": 5},
 			{"id": "potion_major", "quality": 2, "count": 2},
@@ -31,9 +48,12 @@ const DEFS: Dictionary = {
 		"name": "Townsperson",
 		"color": Color(0.7, 0.7, 0.65),
 		"face": "res://art/faces/townsperson.png",
+		"random_talk": true,
 		"dialogue": [
 			"Another outsider. Word of the fires in the north reached us days ago.",
 			"Mind the woods after dark. The bells don't ring for nothing.",
+			"You're the one fleeing the north, aren't I? Don't answer.",
+			"Bram overcharges, but he's the only Bram we've got.",
 		],
 	},
 }

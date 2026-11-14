@@ -19,6 +19,7 @@ var turn := 0
 var busy := false
 var inventory_open := false
 var dialogue_open := false
+var affinity: Dictionary = {}  # npc_id -> int, -100..100
 var current_map: MapData
 var current_depth := 0
 var layer_stack: Array = []
@@ -227,6 +228,7 @@ func save_game() -> void:
 		"player": _player_to_dict(),
 		"current_map": _map_to_dict(current_map),
 		"layer_stack": _stack_to_dicts(),
+		"affinity": affinity,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -993,11 +995,62 @@ func unequip_slot(slot: String) -> void:
 	post_message("You unequip the %s." % it.display_name())
 
 func _talk_to(v: Villager) -> void:
-	if v.def.has("stock"):
+	if v.def.has("root"):
+		dialogue_ui.open_node(v, v.def["root"])
+	elif v.def.has("stock"):
 		shop_ui.open_shop(v)
 	else:
 		dialogue_ui.open(v.display_name, v.def["dialogue"])
+func get_affinity(npc_id: String) -> int:
+	return affinity.get(npc_id, 0)
 
+
+func _add_affinity(npc_id: String, amount: int) -> void:
+	affinity[npc_id] = clampi(get_affinity(npc_id) + amount, -100, 100)
+
+
+## Dialogue option effects. Missing systems respond with flavor, not silence.
+func _dialogue_effect(v: Villager, option: Dictionary) -> void:
+	match String(option.get("effect", "end")):
+		"end":
+			dialogue_ui.close()
+		"shop":
+			dialogue_ui.close()
+			shop_ui.open_shop(v)
+		"lines":
+			dialogue_ui._show_lines(option.get("lines", []), option.get("then", "root"))
+		"flirt":
+			_flirt(v)
+		"quest_stub":
+			dialogue_ui._show_lines(
+				["No work today, child. Ask again when the woods settle."], "root")
+		_:
+			dialogue_ui._show_lines(["..."], "root")
+
+
+func _flirt(v: Villager) -> void:
+	var aff: int = get_affinity(v.npc_id)
+	var chance: int = clampi(40 + player.attributes["CHA"] * 2 + aff / 4, 5, 95)
+	if randi_range(0, 99) < chance:
+		_add_affinity(v.npc_id, 3)
+		dialogue_ui._show_lines([_flirt_success_line(aff)], "root")
+	else:
+		_add_affinity(v.npc_id, -2)
+		dialogue_ui._show_lines([_flirt_fail_line(aff)], "root")
+
+
+func _flirt_success_line(aff: int) -> String:
+	if aff < 0:
+		return "Mira raises an eyebrow. \"Bold. Wrong — but bold.\" ...She smiled, though."
+	if aff < 20:
+		return "Mira laughs despite herself. \"Careful, child. Words like that stick.\""
+	return "Mira squeezes your hand. \"And if I said the feeling was mutual?\""
+
+
+func _flirt_fail_line(aff: int) -> String:
+	if aff < 0:
+		return "Mira's eyes cool. \"Don't. Not today.\""
+	return "Mira pats your arm kindly. \"Sweet, but no. Ask me when we're closer.\""
 
 func shop_buy(v: Villager, index: int) -> void:
 	if index >= v.stock.size():
