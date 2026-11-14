@@ -5,6 +5,7 @@ const DEFS: Dictionary = {
 		"name": "Elder Mira",
 		"color": Color(0.55, 0.8, 0.9),
 		"face": "res://art/faces/elder.png",
+		"quests": ["hungry_souls", "goblin_cull"],
 		"root": {
 			"text": "Nyx. I wondered when you'd climb my stairs.",
 			"options": [
@@ -14,7 +15,7 @@ const DEFS: Dictionary = {
 						"The dark in those hills is older than this town, child.",
 						"The bells ring when the woods move. Lately, they ring at night.",
 					], "then": "root"},
-				{"label": "Ask for work", "effect": "quest_stub"},
+				{"label": "Ask for work", "effect": "quest"},
 				{"label": "Leave", "effect": "end"},
 			],
 		},

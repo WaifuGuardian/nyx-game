@@ -65,5 +65,6 @@ func die() -> void:
 	Game.post_message("The %s dies." % display_name)
 	if is_instance_valid(Game.player):
 		Game.player.gain_xp(def.get("xp", 5))
+	Game.on_enemy_killed(def["id"])
 	Game.roll_loot(self)
 	super.die()
