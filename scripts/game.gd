@@ -1,0 +1,1099 @@
+extends Node
+## Autoload "Game": maps, entities, items, skills, time, survival, turns.
+
+const TILE := 16
+const TILE_ATLAS := {"floor": 0, "wall": 1, "door": 2, "stairs_down": 3, "stairs_up": 4,
+	"grass": 0, "plains": 5, "woods": 6, "mountain": 7, "water": 8, "dungeon_entrance": 9,
+	"town": 10, "chest": 11, "chest_open": 12}
+const WALKABLE: Array[String] = ["floor", "door", "stairs_down", "stairs_up",
+	"grass", "plains", "woods", "dungeon_entrance", "town"]
+const SLOW_TILES: Array[String] = ["woods", "plains"]
+const BASE_HIT := 75
+const CRIT_DIVISOR := 3  # LUCK / this = crit chance %
+const SAVE_PATH := "user://savegame.json"
+
+signal message_posted(text: String)
+signal time_passed(minutes: int)
+
+var turn := 0
+var busy := false
+var inventory_open := false
+var dialogue_open := false
+var current_map: MapData
+var current_depth := 0
+var layer_stack: Array = []
+var map: TileMapLayer
+var entities: Array[Entity] = []
+var ground_items: Dictionary = {}
+var player: Player
+var message_log: Array[String] = []
+var world_minutes: int = 8 * 60
+var day := 1
+var dialogue_ui: DialogueUi
+var shop_ui: ShopUi
+
+
+func post_message(text: String) -> void:
+	message_log.append(text)
+	if message_log.size() > 50:
+		message_log.pop_front()
+	message_posted.emit(text)
+
+
+# --- World clock ------------------------------------------------------------
+
+func advance_time(minutes: int) -> void:
+	world_minutes += minutes
+	while world_minutes >= 24 * 60:
+		world_minutes -= 24 * 60
+		day += 1
+	if is_instance_valid(player) and player.alive:
+		var was_stage: String = player.hunger_stage()
+		player.hunger = maxf(0.0, player.hunger - minutes * Player.HUNGER_RATE)
+		var now_stage: String = player.hunger_stage()
+		if now_stage != was_stage:
+			post_message(player.hunger_stage_message(now_stage))
+		if player.hunger <= 0.0:
+			player.starve_accumulator += minutes
+			while player.starve_accumulator >= 60 and player.alive:
+				player.starve_accumulator -= 60
+				post_message("Starvation gnaws at Nyx. (-1 HP)")
+				player.take_damage(1)
+	time_passed.emit(minutes)
+
+
+func clock_text() -> String:
+	return "Day %d  %02d:%02d" % [day, world_minutes / 60, world_minutes % 60]
+
+
+func new_game() -> void:
+	player = Player.new()
+	player.color = Color(0.9, 0.9, 1.0)
+	_register(player)
+	player.inventory.append(ItemDB.make("camp_supplies", 2, 2))
+	enter_overworld()
+	post_message("Nyx sets out. (Arrows: move, 1-9: hotbar, R: rest, Enter: interact)")
+
+
+func start_new_game() -> void:
+	delete_save()
+	new_game()
+
+
+# --- Skills / hotbar ---------------------------------------------------------
+
+func use_hotbar(index: int) -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	if index >= player.hotbar.size():
+		return
+	var slot: Dictionary = player.hotbar[index]
+	if slot["kind"] == "skill":
+		_cast_skill(slot["id"])
+	elif slot["kind"] == "item":
+		for i in player.inventory.size():
+			if player.inventory[i].id == slot["id"]:
+				player_use_item(i)
+				return
+		post_message("Nothing left of that.")
+
+
+func _cast_skill(id: String) -> void:
+	var def: Dictionary = SkillDB.DEFS[id]
+	if player.skill_cooldowns.get(id, 0) > 0:
+		post_message("%s is not ready. (%d turns)" % [def["name"], player.skill_cooldowns[id]])
+		return
+	var cost: int = def["cost"]
+	if def["cost_type"] == "stamina":
+		if player.stamina < cost:
+			post_message("Not enough stamina for %s." % def["name"])
+			return
+		player.stamina -= cost
+	else:
+		if player.mana < cost:
+			post_message("Not enough mana for %s." % def["name"])
+			return
+		player.mana -= cost
+	player.skill_cooldowns[id] = def["cooldown"]
+	busy = true
+	if player.meditating:
+		player.meditating = false
+		post_message("Nyx breaks her meditation.")
+	player.guarding = false
+	match def["kind"]:
+		"melee":
+			var target_cell: Vector2i = player.grid_pos + player.facing
+			var t := entity_at(target_cell)
+			if t != null and t.hostile:
+				_strike(player, t, def["mult"])
+			else:
+				post_message("%s strikes the air!" % def["name"])
+		"aoe8":
+			var hit_any := false
+			for d in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT,
+					Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+				var t := entity_at(player.grid_pos + d)
+				if t != null and t.hostile:
+					_strike(player, t, def["mult"])
+					hit_any = true
+			if not hit_any:
+				post_message("%s whirls through empty air!" % def["name"])
+		"bolt":
+			var hit_any := false
+			for i in int(def["range"]):
+				var cell: Vector2i = player.grid_pos + player.facing * (i + 1)
+				if not is_walkable(cell):
+					post_message("The bolt splashes against a wall.")
+					break
+				var t := entity_at(cell)
+				if t != null and t.hostile:
+					_strike(player, t, def["mult"], true)
+					hit_any = true
+					break
+			if not hit_any:
+				post_message("The bolt flies into the dark.")
+		"heal":
+			player.hp = mini(player.hp + int(def["amount"]), player.max_hp())
+			post_message("Mend knits Nyx's wounds. (+%d HP)" % int(def["amount"]))
+	await get_tree().create_timer(0.08).timeout
+	player.tick_resources()
+	player.tick_skill_cooldowns()
+	await _resolve_enemy_turns()
+	turn += 1
+	busy = false
+
+
+## A damage roll at a multiplier; shared by melee skills. Can crit.
+func _strike(a: Entity, t: Entity, mult: float, is_bolt := false) -> void:
+	var verb := "bolt" if is_bolt else "strike"
+	var chance: int = clampi(BASE_HIT + a.accuracy() - t.evasion(), 35, 95)
+	if randi_range(0, 99) >= chance:
+		post_message("%s's %s misses the %s." % [a.display_name, verb, t.display_name])
+		return
+	var dmg := randi_range(1, a.attack_power())
+	dmg = int(dmg * mult)
+	dmg = maxi(1, dmg - t.defense())
+	if randi_range(0, 99) < int(a.attributes.get("LUCK", 10)) / CRIT_DIVISOR:
+		dmg *= 2
+		post_message("CRITICAL! %s's %s crushes the %s for %d!" % [a.display_name, verb, t.display_name, dmg])
+	else:
+		post_message("%s's %s hits the %s for %d." % [a.display_name, verb, t.display_name, dmg])
+	t.take_damage(dmg)
+
+
+## Loot on death: roll each entry in the def's drops table.
+func roll_loot(e: Enemy) -> void:
+	var cell := e.grid_pos
+	for d in e.def.get("drops", []):
+		if randf() < d["chance"]:
+			var item := ItemDB.make(d["id"], int(d.get("quality", 2)), 1)
+			var drop_cell := cell
+			if ground_items.has(cell) or (cell == player.grid_pos):
+				var spots := _free_adjacent_cells(cell, 1)
+				if spots.size() > 0:
+					drop_cell = spots[0]
+			_spawn_ground_item(item, drop_cell)
+			post_message("The %s drops %s." % [e.display_name, item.display_name()])
+## Up to `count` free cells adjacent to `center` (8-directional).
+func _free_adjacent_cells(center: Vector2i, count: int) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for d in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT,
+			Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+		var c: Vector2i = center + d
+		if is_walkable(c) and entity_at(c) == null and not ground_items.has(c):
+			out.append(c)
+			if out.size() >= count:
+				break
+	return out
+
+# --- Save / load ---------------------------------------------------------
+
+func has_save() -> bool:
+	return FileAccess.file_exists(SAVE_PATH)
+
+
+func delete_save() -> void:
+	if has_save():
+		DirAccess.remove_absolute(SAVE_PATH)
+
+
+func save_game() -> void:
+	if not is_instance_valid(player):
+		return
+	var data := {
+		"day": day,
+		"minutes": world_minutes,
+		"depth": current_depth,
+		"player": _player_to_dict(),
+		"current_map": _map_to_dict(current_map),
+		"layer_stack": _stack_to_dicts(),
+	}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f == null:
+		push_error("save failed")
+		return
+	f.store_string(JSON.stringify(data, "\t"))
+	f.close()
+	post_message("(Game saved.)")
+
+
+func load_game() -> void:
+	if busy:
+		return
+	if not has_save():
+		post_message("No save to load.")
+		return
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var data: Dictionary = JSON.parse_string(f.get_as_text())
+	f.close()
+	if data == null:
+		push_error("save file corrupt")
+		return
+	if not is_instance_valid(player) or not player.alive:
+		player = Player.new()
+		player.color = Color(0.9, 0.9, 1.0)
+		_register(player)
+	day = int(data["day"])
+	world_minutes = int(data["minutes"])
+	layer_stack = _stack_from_dicts(data["layer_stack"])
+	enter_map(_dict_to_map(data["current_map"]), int(data["depth"]))
+	_player_from_dict(data["player"])
+	post_message("The world returns to Nyx, as she left it.")
+
+
+func _item_to_dict(it: Item) -> Dictionary:
+	return {"id": it.id, "quality": it.quality, "count": it.count}
+
+
+func _map_to_dict(m: MapData) -> Dictionary:
+	var tiles := {}
+	for c in m.tiles:
+		tiles["%d,%d" % [c.x, c.y]] = m.tiles[c]
+	var enemies := []
+	for e in entities:
+		if is_instance_valid(e) and e != player and e is Enemy:
+			enemies.append({"pos": [e.grid_pos.x, e.grid_pos.y], "id": e.def["id"]})
+	var npcs := []
+	for s in m.npc_spawns:
+		npcs.append({"pos": [s["pos"].x, s["pos"].y], "id": s["id"]})
+	var items := []
+	for cell in ground_items:
+		var g: GroundItem = ground_items[cell]
+		var d: Dictionary = _item_to_dict(g.item)
+		d["pos"] = [cell.x, cell.y]
+		items.append(d)
+	return {
+		"size": [m.size.x, m.size.y],
+		"tiles": tiles,
+		"player_spawn": [m.player_spawn.x, m.player_spawn.y],
+		"enemy_spawns": enemies,
+		"npc_spawns": npcs,
+		"item_spawns": items,
+		"is_ambush": m.is_ambush,
+	}
+
+
+func _dict_to_map(d: Dictionary) -> MapData:
+	var m := MapData.new()
+	m.size = Vector2i(int(d["size"][0]), int(d["size"][1]))
+	for k in d["tiles"]:
+		var parts := (k as String).split(",")
+		m.tiles[Vector2i(int(parts[0]), int(parts[1]))] = d["tiles"][k]
+	var ps: Array = d["player_spawn"]
+	m.player_spawn = Vector2i(int(ps[0]), int(ps[1]))
+	m.is_ambush = d.get("is_ambush", false)
+	for s in d["enemy_spawns"]:
+		m.enemy_spawns.append({"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])), "id": s["id"]})
+	for s in d.get("npc_spawns", []):
+		m.npc_spawns.append({"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])), "id": s["id"]})
+	for s in d["item_spawns"]:
+		m.item_spawns.append({
+			"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])),
+			"id": s["id"], "quality": int(s["quality"]), "count": int(s["count"])})
+	return m
+
+
+func _player_to_dict() -> Dictionary:
+	var equipped_dict := {}
+	for slot in player.equipped:
+		equipped_dict[slot] = _item_to_dict(player.equipped[slot])
+	return {
+		"grid_pos": [player.grid_pos.x, player.grid_pos.y],
+		"level": player.level, "xp": player.xp,
+		"hp": player.hp, "stamina": player.stamina, "mana": player.mana,
+		"hunger": player.hunger, "gold": player.gold,
+		"attributes": player.attributes,
+		"inventory": player.inventory.map(_item_to_dict),
+		"equipped": equipped_dict,
+		"hotbar": player.hotbar,
+	}
+
+
+func _player_from_dict(d: Dictionary) -> void:
+	player.level = int(d["level"])
+	player.xp = int(d["xp"])
+	var attrs: Dictionary = {}
+	for k in d["attributes"]:
+		attrs[k] = int(d["attributes"][k])
+	player.attributes = attrs
+	player.hunger = float(d["hunger"])
+	player.stamina = float(d["stamina"])
+	player.mana = float(d["mana"])
+	player.gold = int(d.get("gold", 50))
+	player.hp = int(d["hp"])
+	player.inventory.clear()
+	for itd in d["inventory"]:
+		player.inventory.append(ItemDB.make(itd["id"], int(itd["quality"]), int(itd["count"])))
+	player.equipped.clear()
+	for slot in d["equipped"]:
+		var itd: Dictionary = d["equipped"][slot]
+		player.equipped[slot] = ItemDB.make(itd["id"], int(itd["quality"]), int(itd["count"]))
+	player.hotbar.clear()
+	for slot in d.get("hotbar", []):
+		player.hotbar.append(slot)
+	player.grid_pos = Vector2i(int(d["grid_pos"][0]), int(d["grid_pos"][1]))
+	player.snap()
+
+
+func _stack_to_dicts() -> Array:
+	var out := []
+	for layer in layer_stack:
+		out.append({
+			"map": _map_to_dict(layer["map"]),
+			"depth": layer["depth"],
+			"return_cell": [layer["return_cell"].x, layer["return_cell"].y],
+		})
+	return out
+
+
+func _stack_from_dicts(arr: Array) -> Array:
+	var out := []
+	for layer in arr:
+		out.append({
+			"map": _dict_to_map(layer["map"]),
+			"depth": int(layer["depth"]),
+			"return_cell": Vector2i(int(layer["return_cell"][0]), int(layer["return_cell"][1])),
+		})
+	return out
+
+
+# --- Map handling ---------------------------------------------------------
+
+func enter_overworld() -> void:
+	var overworld := AsciiMapLoader.load("res://maps/overworld.txt")
+	enter_map(overworld, 0)
+
+
+func enter_dungeon(path: String) -> void:
+	layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
+	var dungeon := AsciiMapLoader.load(path)
+	enter_map(dungeon, 1)
+	post_message("Nyx enters the woods dungeon.")
+
+
+func exit_layer() -> void:
+	if layer_stack.is_empty():
+		return
+	var layer: Dictionary = layer_stack.pop_back()
+	enter_map(layer["map"], layer["depth"])
+	player.grid_pos = layer["return_cell"]
+	player.snap()
+	post_message("Nyx returns to the overworld.")
+
+
+func enter_map(map_data: MapData, depth: int) -> void:
+	current_map = map_data
+	current_depth = depth
+	_clear_world()
+	_render_map(map_data)
+	for s in map_data.enemy_spawns:
+		var e := EnemyDB.make(s["id"])
+		e.grid_pos = s["pos"]
+		_register(e)
+	for s in map_data.npc_spawns:
+		var v := Villager.new()
+		v.npc_id = s["id"]
+		v.def = NpcDB.DEFS[s["id"]]
+		v.display_name = v.def["name"]
+		v.color = v.def.get("color", Color(0.6, 0.8, 0.9))
+		v.set_face(v.def.get("face", ""))
+		if v.def.has("stock"):
+			v.stock = v.def["stock"].duplicate(true)
+		v.grid_pos = s["pos"]
+		_register(v)
+	for s in map_data.item_spawns:
+		var g := GroundItem.new()
+		g.item = ItemDB.make(s["id"], s["quality"], s["count"])
+		g.grid_pos = s["pos"]
+		ground_items[g.grid_pos] = g
+		add_child(g)
+	player.grid_pos = map_data.player_spawn
+	player.snap()
+
+
+func _clear_world() -> void:
+	for e in entities:
+		if e != player and is_instance_valid(e):
+			e.queue_free()
+	entities.clear()
+	if is_instance_valid(player):
+		entities.append(player)
+	for g in ground_items.values():
+		if is_instance_valid(g):
+			g.queue_free()
+	ground_items.clear()
+	if map != null and is_instance_valid(map):
+		map.queue_free()
+
+
+func _render_map(map_data: MapData) -> void:
+	map = TileMapLayer.new()
+	map.tile_set = _make_tileset()
+	add_child(map)
+	for cell in map_data.tiles:
+		var id: String = map_data.tiles[cell]
+		map.set_cell(cell, 0, Vector2i(TILE_ATLAS[id], 0))
+
+
+func tile_at(cell: Vector2i) -> String:
+	return current_map.tiles.get(cell, "wall")
+
+
+func is_walkable(cell: Vector2i) -> bool:
+	return WALKABLE.has(tile_at(cell))
+
+
+func generate_floor(depth: int) -> MapData:
+	var map_data := MapData.new()
+	var size := Vector2i(40, 25)
+	map_data.size = size
+	for x in size.x:
+		for y in size.y:
+			var cell := Vector2i(x, y)
+			var wall := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1 or randf() < 0.08
+			map_data.tiles[cell] = "wall" if wall else "floor"
+	map_data.tiles[random_open_cell(map_data)] = "floor"
+	map_data.player_spawn = random_open_cell(map_data)
+	map_data.tiles[map_data.player_spawn] = "floor"
+	map_data.tiles[random_open_cell(map_data)] = "stairs_down"
+	map_data.tiles[random_open_cell(map_data)] = "stairs_up"
+	var pool: Array[String] = ["goblin", "goblin", "archer"]
+	if depth >= 3:
+		pool.append("knight")
+	for i in 5 + depth:
+		map_data.enemy_spawns.append({"pos": random_open_cell(map_data), "id": pool.pick_random()})
+	for i in 2:
+		map_data.item_spawns.append({"pos": random_open_cell(map_data), "id": "potion", "quality": 2, "count": 1})
+	map_data.item_spawns.append({"pos": random_open_cell(map_data), "id": "meat", "quality": 2, "count": 2})
+	if depth >= 2:
+		map_data.tiles[random_open_cell(map_data)] = "chest"
+	return map_data
+
+
+func random_open_cell(map_data: MapData) -> Vector2i:
+	for i in 200:
+		var c := Vector2i(randi_range(1, map_data.size.x - 2), randi_range(1, map_data.size.y - 2))
+		if WALKABLE.has(map_data.tiles.get(c, "wall")) and entity_at(c) == null \
+				and not ground_items.has(c) and c != map_data.player_spawn:
+			return c
+	push_error("no open cell found")
+	return Vector2i.ZERO
+
+
+func _make_tileset() -> TileSet:
+	var ts := TileSet.new()
+	ts.tile_size = Vector2i(TILE, TILE)
+	ts.add_custom_data_layer()
+	ts.set_custom_data_layer_name(0, "walkable")
+	ts.set_custom_data_layer_type(0, TYPE_BOOL)
+	var src := TileSetAtlasSource.new()
+	src.texture = _make_tiles_texture()
+	src.texture_region_size = Vector2i(TILE, TILE)
+	for i in TILE_ATLAS.size():
+		src.create_tile(Vector2i(i, 0))
+	ts.add_source(src, 0)
+	for id in TILE_ATLAS:
+		var td := src.get_tile_data(Vector2i(TILE_ATLAS[id], 0), 0)
+		td.set_custom_data("walkable", WALKABLE.has(id))
+	return ts
+
+
+func _make_tiles_texture() -> ImageTexture:
+	var n := TILE_ATLAS.size()
+	var img := Image.create_empty(n * TILE, TILE, false, Image.FORMAT_RGB8)
+	for i in n:
+		for x in TILE:
+			for y in TILE:
+				var base := Color(0.3, 0.3, 0.34)
+				match i:
+					0, 5: base = Color(0.42, 0.52, 0.3) if (x + y) % 3 == 0 else Color(0.38, 0.48, 0.27)
+					1: base = Color(0.18, 0.18, 0.2) if (x + y) % 2 == 0 else Color(0.15, 0.15, 0.17)
+					2: base = Color(0.4, 0.28, 0.15) if x < 2 or x > TILE - 3 else Color(0.5, 0.38, 0.2)
+					3: base = Color(0.25, 0.25, 0.28) if (x + y) % 2 == 0 else Color(0.22, 0.22, 0.25)
+					4: base = Color(0.4, 0.4, 0.44) if (x + y) % 2 == 0 else Color(0.37, 0.37, 0.41)
+					6: base = Color(0.2, 0.38, 0.2) if (x * y) % 5 != 0 else Color(0.16, 0.3, 0.16)
+					7: base = Color(0.45, 0.42, 0.4) if (x + y) % 4 != 0 else Color(0.36, 0.34, 0.33)
+					8: base = Color(0.2, 0.35, 0.55) if (x + y) % 2 == 0 else Color(0.18, 0.31, 0.5)
+					9: base = Color(0.1, 0.1, 0.12)
+					10: base = Color(0.55, 0.4, 0.35) if (x + y) % 3 != 0 else Color(0.48, 0.35, 0.3)
+					11: base = Color(0.45, 0.32, 0.15) if y < 3 or y > TILE - 4 else Color(0.65, 0.5, 0.2)
+					12: base = Color(0.3, 0.22, 0.1) if y < 5 else Color(0.2, 0.15, 0.08)
+				img.set_pixel(i * TILE + x, y, base)
+	for x in range(4, 12):
+		img.set_pixel(3 * TILE + x, 7, Color(0.7, 0.7, 0.75))
+		img.set_pixel(4 * TILE + x, 7, Color(0.9, 0.9, 0.95))
+	for x in range(3, 13):
+		img.set_pixel(9 * TILE + x, 2, Color(0.85, 0.85, 0.9))
+	for x in range(5, 11):
+		img.set_pixel(10 * TILE + x, 4, Color(0.75, 0.3, 0.25))
+	# chest gold band
+	for x in range(2, 14):
+		img.set_pixel(11 * TILE + x, 7, Color(0.9, 0.8, 0.3))
+	return ImageTexture.create_from_image(img)
+
+
+# --- Entities -------------------------------------------------------------
+
+func _register(e: Entity) -> void:
+	entities.append(e)
+	add_child(e)
+	if e is Player:
+		player = e
+
+
+func entity_at(cell: Vector2i) -> Entity:
+	for e in entities:
+		if is_instance_valid(e) and e.grid_pos == cell:
+			return e
+	return null
+
+
+# --- Items -------------------------------------------------------------
+
+func _spawn_ground_item(item: Item, cell: Vector2i) -> void:
+	var g := GroundItem.new()
+	g.item = item
+	g.grid_pos = cell
+	ground_items[cell] = g
+	add_child(g)
+
+
+func _try_pickup(cell: Vector2i) -> void:
+	if not ground_items.has(cell):
+		return
+	var g: GroundItem = ground_items[cell]
+	if _gain_item(g.item):
+		ground_items.erase(cell)
+		g.queue_free()
+
+
+## Central "give the player an item" logic: stacks merge, weight/cap checks,
+## hotbar auto-bind. Returns false if it couldn't fit.
+func _gain_item(item: Item) -> bool:
+	if item.stackable():
+		for it in player.inventory:
+			if it.id == item.id and it.quality == item.quality:
+				it.count += item.count
+				post_message("You pick up the %s. (x%d)" % [item.display_name(), it.count])
+				_bind_item_hotbar(item.id)
+				return true
+	if player.carry_weight() + item.weight() > player.carry_capacity():
+		post_message("Too heavy to carry the %s." % item.display_name())
+		return false
+	if player.inventory.size() >= Player.MAX_INVENTORY:
+		post_message("Your pack is full.")
+		return false
+	player.inventory.append(item)
+	_bind_item_hotbar(item.id)
+	post_message("You pick up the %s." % item.display_name())
+	return true
+
+
+## Items auto-bind to the first empty hotbar slot.
+func _bind_item_hotbar(id: String) -> void:
+	for slot in player.hotbar:
+		if slot["kind"] == "item" and slot["id"] == id:
+			return
+	for i in player.hotbar.size():
+		if player.hotbar[i]["kind"] == "none":
+			player.hotbar[i] = {"kind": "item", "id": id}
+			return
+
+
+## When the last of an item is consumed, clear its hotbar slots.
+func hotbar_item_lost(id: String) -> void:
+	if player.count_item(id) == 0:
+		for i in player.hotbar.size():
+			if player.hotbar[i]["kind"] == "item" and player.hotbar[i]["id"] == id:
+				player.hotbar[i] = {"kind": "none", "id": ""}
+
+
+func _finish_pickup(g: GroundItem) -> void:
+	ground_items.erase(g.grid_pos)
+	g.queue_free()
+
+
+func cast_scroll(item: Item, user: Entity) -> void:
+	match item.id:
+		"scroll_flames":
+			var power := int(item.def["power"] * ItemDB.QUALITY_MULT[item.quality])
+			post_message("Flames burst around %s!" % user.display_name)
+			for e in entities.duplicate():
+				if is_instance_valid(e) and e != user and e.hostile:
+					var d: Vector2i = e.grid_pos - user.grid_pos
+					if absi(d.x) <= 2 and absi(d.y) <= 2:
+						var dmg := randi_range(power / 2, power)
+						e.take_damage(dmg)
+						post_message("Flames sear the %s for %d." % [e.display_name, dmg])
+
+
+# --- Turn system ----------------------------------------------------------
+
+func _turn_cost() -> int:
+	if current_depth == 0:
+		var tile := tile_at(player.grid_pos)
+		if SLOW_TILES.has(tile):
+			return 60
+		return 30
+	return 0
+
+
+func player_action(dir: Vector2i) -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	busy = true
+	var old_map := current_map
+	player.facing = dir
+	if player.meditating:
+		player.meditating = false
+		post_message("Nyx breaks her meditation.")
+	player.guarding = false
+	var acted: bool = await attempt_move(player, dir)
+	if acted:
+		if is_instance_valid(player):
+			_try_pickup(player.grid_pos)
+			player.tick_resources()
+			player.tick_skill_cooldowns()
+			_check_special_tiles()
+			var cost := _turn_cost()
+			if cost > 0:
+				advance_time(cost)
+				_maybe_travel_encounter()
+		if current_map != old_map:
+			player._last_held = Vector2i.ZERO
+			await get_tree().create_timer(0.15).timeout
+		if is_instance_valid(player) and player.alive:
+			await _resolve_enemy_turns()
+			turn += 1
+	busy = false
+
+
+func _check_special_tiles() -> void:
+	var t := tile_at(player.grid_pos)
+	match t:
+		"stairs_down":
+			post_message("Stairs lead down into darkness. (Enter to descend)")
+		"stairs_up":
+			post_message("Stairs lead back up. (Enter to climb)")
+		"dungeon_entrance":
+			post_message("A dark maw opens in the hillside. (Enter to enter)")
+		"town":
+			post_message("The town of Neverwinter. The gates stand open. (Enter to visit)")
+
+
+func player_interact() -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	if _try_flee_ambush():
+		return
+	var t := tile_at(player.grid_pos)
+	match t:
+		"stairs_down":
+			busy = true
+			layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
+			enter_map(generate_floor(current_depth + 1), current_depth + 1)
+			post_message("Nyx descends to floor %d." % current_depth)
+			await get_tree().create_timer(0.15).timeout
+			busy = false
+		"stairs_up":
+			if current_depth <= 1:
+				exit_layer()
+				return
+			busy = true
+			enter_map(generate_floor(current_depth - 1), current_depth - 1)
+			post_message("Nyx climbs to floor %d." % current_depth)
+			await get_tree().create_timer(0.15).timeout
+			busy = false
+		"dungeon_entrance":
+			busy = true
+			enter_dungeon("res://maps/woods_dungeon.txt")
+			await get_tree().create_timer(0.15).timeout
+			busy = false
+		"town":
+			busy = true
+			layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
+			enter_map(AsciiMapLoader.load("res://maps/neverwinter.txt"), 1)
+			post_message("Nyx enters Neverwinter.")
+			await get_tree().create_timer(0.15).timeout
+			busy = false
+		"chest":
+			_open_chest()
+		"chest_open":
+			post_message("Empty. Someone got here first — probably you.")
+		_:
+			post_message("There is nothing to interact with here.")
+
+
+## Containers: roll the loot pool, straight into the pack (if it fits).
+func _open_chest() -> void:
+	var pool: Array[String] = ["potion", "potion_major", "scroll_flames", "meat", "camp_supplies"]
+	var id: String = pool.pick_random()
+	var quality := 2
+	var roll := randf()
+	if roll < 0.05:
+		quality = 4
+	elif roll < 0.3:
+		quality = 3
+	var item := ItemDB.make(id, quality, 1)
+	current_map.tiles[player.grid_pos] = "chest_open"
+	_render_cell(player.grid_pos)
+	post_message("The chest creaks open... %s!" % item.display_name())
+	if not _gain_item(item):
+		_spawn_ground_item(item, player.grid_pos)
+
+
+func _render_cell(cell: Vector2i) -> void:
+	map.set_cell(cell, 0, Vector2i(TILE_ATLAS[tile_at(cell)], 0))
+
+
+func _maybe_travel_encounter() -> void:
+	if current_depth != 0 or current_map.is_ambush:
+		return
+	if randf() > 0.12:
+		return
+	var roll := randi_range(0, 2)
+	if roll < 2:
+		_start_ambush()
+	else:
+		var finds: Array[String] = ["potion", "meat"]
+		_spawn_ground_item(ItemDB.make(finds.pick_random(), 2, 1), player.grid_pos)
+		post_message("You spot something half-buried here.")
+
+
+func _start_ambush() -> void:
+	layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
+	var map_data := MapData.new()
+	map_data.is_ambush = true
+	var size := Vector2i(14, 11)
+	map_data.size = size
+	for x in size.x:
+		for y in size.y:
+			var edge := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1
+			map_data.tiles[Vector2i(x, y)] = "wall" if edge else "floor"
+	for i in 4:
+		var c := random_open_cell(map_data)
+		if c != Vector2i.ZERO:
+			map_data.tiles[c] = "wall"
+	map_data.player_spawn = Vector2i(size.x / 2, size.y / 2)
+	map_data.tiles[map_data.player_spawn] = "floor"
+	var ids: Array[String] = ["goblin", "goblin", "archer"]
+	for i in randi_range(2, 3):
+		map_data.enemy_spawns.append({"pos": _rim_cell(map_data), "id": ids.pick_random()})
+	post_message("Ambush! Hostiles close in from all sides!")
+	enter_map(map_data, current_depth)
+
+
+func _rim_cell(map_data: MapData) -> Vector2i:
+	for i in 100:
+		var side := randi_range(0, 3)
+		var c := Vector2i.ZERO
+		match side:
+			0: c = Vector2i(randi_range(1, map_data.size.x - 2), 1)
+			1: c = Vector2i(randi_range(1, map_data.size.x - 2), map_data.size.y - 2)
+			2: c = Vector2i(1, randi_range(1, map_data.size.y - 2))
+			3: c = Vector2i(map_data.size.x - 2, randi_range(1, map_data.size.y - 2))
+		if WALKABLE.has(map_data.tiles.get(c, "wall")) and entity_at(c) == null:
+			return c
+	return Vector2i(1, 1)
+
+
+func _try_flee_ambush() -> bool:
+	if layer_stack.is_empty() or not current_map.is_ambush:
+		return false
+	var on_edge := false
+	for d in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
+		if tile_at(player.grid_pos + d) == "wall":
+			on_edge = true
+			break
+	if not on_edge:
+		return false
+	exit_layer()
+	post_message("Nyx slips away from the ambush!")
+	return true
+
+
+# --- Rest ------------------------------------------------------------------
+
+func player_rest() -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	if current_map.is_ambush:
+		post_message("Too dangerous to rest here.")
+		return
+	if _enemy_near_sight():
+		post_message("Enemies are too close to rest.")
+		return
+	if player.count_item("camp_supplies") < 1:
+		post_message("You need camp supplies to rest. (Buy them in town, find them as loot.)")
+		return
+	busy = true
+	player.consume_item("camp_supplies", 1)
+	post_message("Nyx makes camp...")
+	var total := 480
+	var chunk := 30
+	var chunks := total / chunk
+	var elapsed := 0
+	var interrupted := false
+	while elapsed < total and not interrupted and is_instance_valid(player) and player.alive:
+		advance_time(chunk)
+		elapsed += chunk
+		player.hp = mini(player.hp + maxi(1, player.max_hp() / chunks), player.max_hp())
+		player.mana = minf(player.mana + player.max_mana() / float(chunks), player.max_mana())
+		player.stamina = minf(player.stamina + 100.0 / float(chunks), 100.0)
+		if randf() < 0.03:
+			post_message("Nyx is roused by a sound in the night!")
+			_spawn_rest_ambush()
+			interrupted = true
+		await get_tree().create_timer(0.02).timeout
+	if not interrupted and is_instance_valid(player) and player.alive:
+		post_message("Nyx rests until morning, fully recovered.")
+		save_game()
+	elif is_instance_valid(player) and player.alive:
+		post_message("The rest is broken off.")
+	busy = false
+
+
+func _spawn_rest_ambush() -> void:
+	_start_ambush()
+
+
+func player_guard() -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	busy = true
+	player.guarding = true
+	post_message("Nyx takes a defensive stance.")
+	player.tick_resources(1)
+	advance_time(_turn_cost() if current_depth > 0 else 0)
+	await _resolve_enemy_turns()
+	turn += 1
+	busy = false
+
+
+func player_wait() -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	busy = true
+	post_message("Nyx waits, catching her breath.")
+	player.tick_resources(2)
+	advance_time(_turn_cost() if current_depth > 0 else 0)
+	await _resolve_enemy_turns()
+	turn += 1
+	busy = false
+
+
+func player_toggle_meditation() -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	busy = true
+	player.meditating = not player.meditating
+	if player.meditating:
+		post_message("Nyx begins meditating.")
+		while player.meditating and is_instance_valid(player) and player.alive:
+			player.mana = minf(player.mana + 6.0, player.max_mana())
+			if _enemy_near_sight():
+				player.meditating = false
+				post_message("Nyx senses danger and stops meditating.")
+				break
+			if player.hunger < Player.STARVING_THRESHOLD:
+				player.meditating = false
+				post_message("Nyx is too hungry to focus on meditation.")
+				break
+			if Input.is_key_pressed(KEY_M):
+				player.meditating = false
+				post_message("Nyx stops meditating.")
+				break
+			player.tick_resources()
+			player.tick_skill_cooldowns()
+			advance_time(5)
+			await get_tree().create_timer(0.15).timeout
+			await _resolve_enemy_turns()
+			turn += 1
+	else:
+		post_message("Nyx stops meditating.")
+	busy = false
+
+
+func _enemy_near_sight() -> bool:
+	var radius: int = player.attributes["PER"] / 5 + 2
+	for e in entities:
+		if is_instance_valid(e) and e != player and e.hostile:
+			var d: Vector2i = e.grid_pos - player.grid_pos
+			if absi(d.x) <= radius and absi(d.y) <= radius:
+				return true
+	return false
+
+
+func player_use_item(index: int) -> void:
+	if busy or not is_instance_valid(player) or not player.alive:
+		return
+	if index >= player.inventory.size():
+		return
+	busy = true
+	if player.meditating:
+		player.meditating = false
+		post_message("Nyx breaks her meditation.")
+	player.guarding = false
+	player.use_item(index)
+	await get_tree().create_timer(0.08).timeout
+	player.tick_resources()
+	await _resolve_enemy_turns()
+	turn += 1
+	busy = false
+
+
+func drop_item(index: int) -> void:
+	if not is_instance_valid(player) or not player.alive:
+		return
+	if index >= player.inventory.size():
+		return
+	var item: Item = player.inventory[index]
+	if ground_items.has(player.grid_pos):
+		post_message("No room to drop that here.")
+		return
+	var g := GroundItem.new()
+	g.item = item
+	g.grid_pos = player.grid_pos
+	ground_items[player.grid_pos] = g
+	add_child(g)
+	player.inventory.remove_at(index)
+	post_message("You drop the %s." % item.display_name())
+func unequip_slot(slot: String) -> void:
+	if not is_instance_valid(player):
+		return
+	var it: Item = player.equipped.get(slot)
+	if it == null:
+		return
+	if player.inventory.size() >= Player.MAX_INVENTORY:
+		post_message("Your pack is full — can't unequip.")
+		return
+	player.equipped.erase(slot)
+	player.inventory.append(it)
+	_bind_item_hotbar(it.id)
+	post_message("You unequip the %s." % it.display_name())
+
+func _talk_to(v: Villager) -> void:
+	if v.def.has("stock"):
+		shop_ui.open_shop(v)
+	else:
+		dialogue_ui.open(v.display_name, v.def["dialogue"])
+
+
+func shop_buy(v: Villager, index: int) -> void:
+	if index >= v.stock.size():
+		return
+	var entry: Dictionary = v.stock[index]
+	if int(entry["count"]) <= 0:
+		post_message("Sold out.")
+		return
+	var item := ItemDB.make(entry["id"], int(entry["quality"]), 1)
+	var price: int = item.value()
+	if player.gold < price:
+		post_message("Not enough gold. (%d needed)" % price)
+		return
+	if player.carry_weight() + item.weight() > player.carry_capacity():
+		post_message("Too heavy to carry.")
+		return
+	if player.inventory.size() >= Player.MAX_INVENTORY:
+		post_message("Your pack is full.")
+		return
+	player.gold -= price
+	entry["count"] = int(entry["count"]) - 1
+	player.inventory.append(item)
+	_bind_item_hotbar(item.id)
+	post_message("You buy the %s for %d g." % [item.display_name(), price])
+
+
+func shop_sell(v: Villager, index: int) -> void:
+	if index >= player.inventory.size():
+		return
+	var item: Item = player.inventory[index]
+	var price: int = item.value() / 2
+	player.gold += price
+	var sold := false
+	for e in v.stock:
+		if e["id"] == item.id and int(e["quality"]) == item.quality:
+			e["count"] = int(e["count"]) + 1
+			sold = true
+	if not sold:
+		v.stock.append({"id": item.id, "quality": item.quality, "count": 1})
+	if item.stackable():
+		item.count -= 1
+		if item.count <= 0:
+			player.inventory.remove_at(index)
+	else:
+		player.inventory.remove_at(index)
+	post_message("You sell the %s for %d g." % [item.display_name(), price])
+
+
+func _resolve_enemy_turns() -> void:
+	for e in entities.duplicate():
+		if not is_instance_valid(e) or e == player or not e.alive:
+			continue
+		e.energy += e.speed()
+		var actions := 0
+		while is_instance_valid(e) and e.alive and e.energy >= 100.0 and actions < 8:
+			var cost: int = await e.take_turn()
+			e.energy -= maxf(float(cost), 0.0)
+			actions += 1
+		if is_instance_valid(e):
+			e.tick_resources()
+
+
+func attempt_move(e: Entity, dir: Vector2i) -> bool:
+	var target := e.grid_pos + dir
+	var other := entity_at(target)
+	if other != null and other != e:
+		if other is Villager:
+			_talk_to(other)
+			return false
+		if other.hostile != e.hostile:
+			_attack(e, other)
+			await get_tree().create_timer(0.08).timeout
+			return true
+		return false
+	if not is_walkable(target):
+		return false
+	e.grid_pos = target
+	e.slide()
+	await get_tree().create_timer(0.08).timeout
+	return true
+
+
+func _attack(a: Entity, t: Entity) -> void:
+	var chance: int = clampi(BASE_HIT + a.accuracy() - t.evasion(), 35, 95)
+	if randi_range(0, 99) < chance:
+		var dmg := randi_range(1, a.attack_power())
+		dmg = maxi(1, dmg - t.defense())
+		if randi_range(0, 99) < int(a.attributes.get("LUCK", 10)) / CRIT_DIVISOR:
+			dmg *= 2
+			post_message("CRITICAL! %s tears into the %s for %d!" % [a.display_name, t.display_name, dmg])
+		else:
+			post_message("%s hits %s for %d damage." % [a.display_name, t.display_name, dmg])
+		if t.guarding:
+			dmg = dmg / 2
+			t.guarding = false
+			post_message("%s's guard softens the blow!" % t.display_name)
+		t.take_damage(dmg)
+	else:
+		post_message("%s swings at %s and misses." % [a.display_name, t.display_name])
