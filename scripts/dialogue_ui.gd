@@ -54,7 +54,10 @@ func open_node(v: Villager, node: Dictionary) -> void:
 	_begin(v.display_name)
 	villager = v
 	_enter_node(node)
-
+func show_node(v: Villager, node: Dictionary) -> void:
+	_begin(v.display_name)
+	villager = v
+	_enter_node(node)
 
 func _begin(npc_name: String) -> void:
 	speaker = npc_name

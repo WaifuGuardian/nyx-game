@@ -32,6 +32,8 @@ var world_minutes: int = 8 * 60
 var day := 1
 var dialogue_ui: DialogueUi
 var shop_ui: ShopUi
+var quests: Dictionary = {}       # quest_id -> progress
+var quests_done: Array[String] = []
 
 
 func post_message(text: String) -> void:
@@ -229,6 +231,8 @@ func save_game() -> void:
 		"current_map": _map_to_dict(current_map),
 		"layer_stack": _stack_to_dicts(),
 		"affinity": affinity,
+		"quests": quests,
+		"quests_done": quests_done,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -257,6 +261,13 @@ func load_game() -> void:
 		_register(player)
 	day = int(data["day"])
 	world_minutes = int(data["minutes"])
+	affinity = data.get("affinity", {})     # <- add this line
+	quests = {}
+	for k in data.get("quests", {}):
+		quests[k] = int(data["quests"][k])
+	quests_done = []
+	for q in data.get("quests_done", []):
+		quests_done.append(q)
 	layer_stack = _stack_from_dicts(data["layer_stack"])
 	enter_map(_dict_to_map(data["current_map"]), int(data["depth"]))
 	_player_from_dict(data["player"])
@@ -1021,9 +1032,14 @@ func _dialogue_effect(v: Villager, option: Dictionary) -> void:
 			dialogue_ui._show_lines(option.get("lines", []), option.get("then", "root"))
 		"flirt":
 			_flirt(v)
-		"quest_stub":
-			dialogue_ui._show_lines(
-				["No work today, child. Ask again when the woods settle."], "root")
+		"quest":
+			_quest_talk(v)
+		"accept_quest":
+			quests[option["quest"]] = 0
+			post_message("Quest accepted: %s" % QuestDB.DEFS[option["quest"]]["title"])
+			dialogue_ui.close()
+		"turn_in":
+			_turn_in(option["quest"])
 		_:
 			dialogue_ui._show_lines(["..."], "root")
 
@@ -1051,7 +1067,90 @@ func _flirt_fail_line(aff: int) -> String:
 	if aff < 0:
 		return "Mira's eyes cool. \"Don't. Not today.\""
 	return "Mira pats your arm kindly. \"Sweet, but no. Ask me when we're closer.\""
+func on_enemy_killed(enemy_id: String) -> void:
+	for qid in quests:
+		var q: Dictionary = QuestDB.DEFS[qid]
+		if q["type"] == "kill" and q["target_id"] == enemy_id:
+			quests[qid] = int(quests[qid]) + 1
+			post_message("Quest updated: %s (%d/%d)" % [q["title"], int(quests[qid]), int(q["amount"])])
 
+
+func _quest_progress(qid: String, q: Dictionary) -> int:
+	if q["type"] == "kill":
+		return int(quests[qid])
+	return mini(player.count_item(q["target_id"]), int(q["amount"]))
+
+
+func quest_marker_for(npc_id: String) -> String:
+	var def_ids: Array = NpcDB.DEFS.get(npc_id, {}).get("quests", [])
+	var has_available := false
+	var has_active := false
+	for qid in def_ids:
+		if quests_done.has(qid):
+			continue
+		if quests.has(qid):
+			if _quest_progress(qid, QuestDB.DEFS[qid]) >= int(QuestDB.DEFS[qid]["amount"]):
+				return "!"
+			has_active = true
+		else:
+			has_available = true
+	if has_available:
+		return "?"
+	if has_active:
+		return "…"
+	return ""
+
+
+func _quest_talk(v: Villager) -> void:
+	var def_ids: Array = NpcDB.DEFS.get(v.npc_id, {}).get("quests", [])
+	for qid in def_ids:  # ready to turn in?
+		if quests.has(qid) and not quests_done.has(qid):
+			var q: Dictionary = QuestDB.DEFS[qid]
+			if _quest_progress(qid, q) >= int(q["amount"]):
+				dialogue_ui.show_node(v, {
+					"text": "You actually did it. Here — as promised.",
+					"options": [
+						{"label": "Turn in: %s" % q["title"], "effect": "turn_in", "quest": qid},
+						{"label": "Not yet", "effect": "end"}]})
+				return
+	for qid in def_ids:  # available to accept?
+		if not quests.has(qid) and not quests_done.has(qid):
+			var q: Dictionary = QuestDB.DEFS[qid]
+			dialogue_ui.show_node(v, {
+				"text": q["offer_text"],
+				"options": [
+					{"label": "Accept: %s" % q["title"], "effect": "accept_quest", "quest": qid},
+					{"label": "Decline", "effect": "end"}]})
+			return
+	for qid in def_ids:  # in progress
+		if quests.has(qid):
+			var q: Dictionary = QuestDB.DEFS[qid]
+			dialogue_ui.show_node(v, {
+				"text": q.get("progress_text", "..."),
+				"options": [{"label": "Back", "effect": "end"}]})
+			return
+	dialogue_ui.show_node(v, {
+		"text": "No work today, child.",
+		"options": [{"label": "Back", "effect": "end"}]})
+
+
+func _turn_in(qid: String) -> void:
+	var q: Dictionary = QuestDB.DEFS[qid]
+	if q["type"] == "fetch":
+		if player.count_item(q["target_id"]) < int(q["amount"]):
+			post_message("Still waiting on that %s." % q["target_id"])
+			return
+		player.consume_item(q["target_id"], int(q["amount"]))
+	quests.erase(qid)
+	quests_done.append(qid)
+	player.gold += int(q["reward_gold"])
+	player.gain_xp(int(q["reward_xp"]))
+	for r in q.get("reward_items", []):
+		var item := ItemDB.make(r["id"], int(r.get("quality", 2)), int(r.get("count", 1)))
+		if not _gain_item(item):
+			_spawn_ground_item(item, player.grid_pos)
+	post_message("Quest complete: %s! (+%d g, +%d XP)" % [q["title"], int(q["reward_gold"]), int(q["reward_xp"])])
+	dialogue_ui.close()
 func shop_buy(v: Villager, index: int) -> void:
 	if index >= v.stock.size():
 		return
@@ -1150,3 +1249,22 @@ func _attack(a: Entity, t: Entity) -> void:
 		t.take_damage(dmg)
 	else:
 		post_message("%s swings at %s and misses." % [a.display_name, t.display_name])
+		## True if a straight 8-directional line from `from` to `to` is unblocked by walls.
+func has_clear_line(from: Vector2i, to: Vector2i) -> bool:
+	var delta: Vector2i = to - from
+	# Must be a straight line (same row, column, or perfect diagonal).
+	if delta.x != 0 and delta.y != 0 and absi(delta.x) != absi(delta.y):
+		return false
+	var step := Vector2i(signi(delta.x), signi(delta.y))
+	var cell := from + step
+	while cell != to:
+		if not is_walkable(cell):
+			return false
+		cell += step
+	return true
+
+
+## Ranged attack along a clear line; same math as a strike, no facing needed.
+func _ranged_attack(a: Entity, t: Entity) -> void:
+	post_message("The %s looses an arrow at %s!" % [a.display_name, t.display_name])
+	_strike(a, t, 1.0, true)

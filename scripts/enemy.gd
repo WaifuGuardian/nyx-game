@@ -18,10 +18,18 @@ func take_turn() -> int:
 	var to_player: Vector2i = Game.player.grid_pos - grid_pos
 	var dist := absi(to_player.x) + absi(to_player.y)
 	var role: String = def.get("role", "melee")
-	if role == "ranged" and dist == 2:
-		var away := Vector2i(-signi(to_player.x), -signi(to_player.y))
-		await Game.attempt_move(self, away)
-		return 100
+	# Ranged: shoot if in range with clear line; keep distance otherwise.
+	if role == "ranged":
+		var shoot_range: int = def.get("range", 5)
+		if dist <= 2:
+			var away := Vector2i(-signi(to_player.x), -signi(to_player.y))
+			if not await Game.attempt_move(self, away):
+				var alt := Vector2i(-signi(to_player.y), -signi(to_player.x))
+				await Game.attempt_move(self, alt)
+			return 100
+		if dist <= shoot_range and Game.has_clear_line(grid_pos, Game.player.grid_pos):
+			Game._ranged_attack(self, Game.player)
+			return 100
 	if dist <= 8:
 		var dir := Vector2i(signi(to_player.x), signi(to_player.y))
 		if not await Game.attempt_move(self, dir):

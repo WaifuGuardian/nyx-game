@@ -9,6 +9,7 @@ var hotbar_label: Label
 var inv_label: Label
 var log_label: Label
 var _last_msg := ""
+var quests_label: Label
 
 
 func _ready() -> void:
@@ -24,6 +25,8 @@ func _ready() -> void:
 	hotbar_label = Label.new()
 	inv_label = Label.new()
 	log_label = Label.new()
+	quests_label = Label.new()
+	vbox.add_child(quests_label)
 	vbox.add_child(stats_label)
 	vbox.add_child(attr_label)
 	vbox.add_child(xp_label)
@@ -80,6 +83,11 @@ func _process(_delta: float) -> void:
 					break
 		hb += "%d:%s  " % [i + 1, label]
 	hotbar_label.text = hb
+	var qtext := ""
+	for qid in Game.quests:
+		var q: Dictionary = QuestDB.DEFS[qid]
+		qtext += "%s: %s %d/%d\n" % [q["title"], q["target_id"], Game._quest_progress(qid, q), int(q["amount"])]
+	quests_label.text = qtext
 	# --- Inventory list ---
 	var lines := ""
 	for i in p.inventory.size():
