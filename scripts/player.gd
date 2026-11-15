@@ -33,6 +33,10 @@ func _init() -> void:
 	set_face("res://art/faces/nyx.png")
 	hp = max_hp()
 	mana = max_mana()
+	equipped = {
+		"chest": ItemDB.make("cloth_top"),
+		"legs": ItemDB.make("cloth_legs"),
+	}
 	for id in ["power_strike", "cleave", "firebolt", "mend"]:
 		hotbar.append({"kind": "skill", "id": id})
 	while hotbar.size() < 9:
@@ -149,9 +153,10 @@ func attack_power() -> int:
 
 func defense() -> int:
 	var d: int = super.defense()
-	var a: Item = equipped.get("armor")
-	if a != null:
-		d += int(a.def.get("def", 0) * ItemDB.QUALITY_MULT[a.quality])
+	for slot in ["chest", "legs"]:
+		var a: Item = equipped.get(slot) as Item
+		if a != null and a.def.get("kind", "") == "armor":
+			d += int(a.def.get("def", 0) * ItemDB.QUALITY_MULT[a.quality])
 	return d
 
 
@@ -235,7 +240,7 @@ func use_item(index: int) -> void:
 			Game.cast_scroll(item, self)
 			_consume(item)
 		"weapon", "armor":
-			var slot: String = item.def["kind"]
+			var slot: String = item.def.get("slot", "chest")
 			var old: Item = equipped.get(slot)
 			equipped[slot] = item
 			if old != null:

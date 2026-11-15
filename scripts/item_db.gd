@@ -43,6 +43,20 @@ const DEFS: Dictionary = {
 		"value": 20, "weight": 3, "stack": true,
 		"color": Color(0.75, 0.65, 0.45),
 	},
+	"cloth_top": {
+		"name": "Nyx's Blouse", "kind": "armor", "def": 1,
+		"value": 5, "weight": 1, "stack": false,
+		"slot": "chest",
+		"doll_layer": "res://art/doll/nyxs_blouse.png",
+		"color": Color(0.6, 0.3, 0.3),
+	},
+	"cloth_legs": {
+		"name": "Nyx's Skirt", "kind": "armor", "def": 0,
+		"value": 5, "weight": 1, "stack": false,
+		"slot": "legs",
+		"doll_layer": "res://art/doll/nyxs_skirt.png",
+		"color": Color(0.55, 0.35, 0.3),
+	},
 }
 
 
