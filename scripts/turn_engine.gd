@@ -165,8 +165,8 @@ static func strike(g: GameState, a: Entity, t: Entity, mult: float, is_bolt := f
 		g.post_message("%s's %s misses the %s." % [a.display_name, verb, t.display_name])
 		return
 	var raw := randi_range(1, a.attack_power())
-	var dmg: int = maxi(1, int(raw * mult) - t.defense())
-	dmg = maxi(dmg, int(ceil(raw * 0.4)))   # mitigation floor: armor eats at most 60%
+	var dmg := maxi(1, raw - t.defense())
+	dmg = maxi(dmg, int(ceil(raw * 0.4)))  # mitigation floor: armor eats at most 60%
 	if randi_range(0, 99) < int(a.attributes.get("LUCK", 10)) / CRIT_DIVISOR:
 		dmg *= 2
 		g.post_message("CRITICAL! %s's %s crushes the %s for %d!" % [a.display_name, verb, t.display_name, dmg])

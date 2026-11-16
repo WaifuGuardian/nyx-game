@@ -162,51 +162,9 @@ func _cast_skill(id: String) -> void:
 	busy = false
 
 
-## A damage roll at a multiplier; shared by melee skills. Can crit.
-func _strike(a: Entity, t: Entity, mult: float, is_bolt := false) -> void:
-	var verb := "bolt" if is_bolt else "strike"
-	var chance: int = clampi(BASE_HIT + a.accuracy() - t.evasion(), 35, 95)
-	if randi_range(0, 99) >= chance:
-		post_message("%s's %s misses the %s." % [a.display_name, verb, t.display_name])
-		return
-	var dmg := randi_range(1, a.attack_power())
-	dmg = int(dmg * mult)
-	dmg = maxi(1, dmg - t.defense())
-	if randi_range(0, 99) < int(a.attributes.get("LUCK", 10)) / CRIT_DIVISOR:
-		dmg *= 2
-		post_message("CRITICAL! %s's %s crushes the %s for %d!" % [a.display_name, verb, t.display_name, dmg])
-	else:
-		post_message("%s's %s hits the %s for %d." % [a.display_name, verb, t.display_name, dmg])
-	t.take_damage(dmg)
 
-
-## Loot on death: roll each entry in the def's drops table.
-func roll_loot(e: Enemy) -> void:
-	var cell := e.grid_pos
-	for d in e.def.get("drops", []):
-		if randf() < d["chance"]:
-			var item := ItemDB.make(d["id"], int(d.get("quality", 2)), 1)
-			var drop_cell := cell
-			if ground_items.has(cell) or (cell == player.grid_pos):
-				var spots := _free_adjacent_cells(cell, 1)
-				if spots.size() > 0:
-					drop_cell = spots[0]
-			_spawn_ground_item(item, drop_cell)
-			post_message("The %s drops %s." % [e.display_name, item.display_name()])
-## Up to `count` free cells adjacent to `center` (8-directional).
-func _free_adjacent_cells(center: Vector2i, count: int) -> Array[Vector2i]:
-	var out: Array[Vector2i] = []
-	for d in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT,
-			Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
-		var c: Vector2i = center + d
-		if is_walkable(c) and entity_at(c) == null and not ground_items.has(c):
-			out.append(c)
-			if out.size() >= count:
-				break
-	return out
 
 # --- Save / load ---------------------------------------------------------
-
 
 func save_game() -> void:
 	SaveSystem.save_game(self)
@@ -332,16 +290,6 @@ func _dungeon_id_at(cell: Vector2i) -> String:
 
 func is_walkable(cell: Vector2i) -> bool:
 	return WALKABLE.has(tile_at(cell))
-
-func random_open_cell(map_data: MapData) -> Vector2i:
-	for i in 200:
-		var c := Vector2i(randi_range(1, map_data.size.x - 2), randi_range(1, map_data.size.y - 2))
-		if WALKABLE.has(map_data.tiles.get(c, "wall")) and entity_at(c) == null \
-				and not ground_items.has(c) and c != map_data.player_spawn:
-			return c
-	push_error("no open cell found")
-	return Vector2i.ZERO
-
 
 func _make_tileset() -> TileSet:
 	var ts := TileSet.new()
@@ -502,47 +450,61 @@ func cast_scroll(item: Item, user: Entity) -> void:
 						e.take_damage(dmg)
 						post_message("Flames sear the %s for %d." % [e.display_name, dmg])
 
-
-# --- Turn system ----------------------------------------------------------
-
-func _turn_cost() -> int:
-	if current_depth == 0:
-		var tile := tile_at(player.grid_pos)
-		if SLOW_TILES.has(tile):
-			return 60
-		return 30
-	return 0
-
+## --- Delegated systems (see turn_engine.gd / spawn_system.gd) ----------------
 
 func player_action(dir: Vector2i) -> void:
-	if busy or not is_instance_valid(player) or not player.alive:
-		return
-	busy = true
-	var old_map := current_map
-	player.facing = dir
-	if player.meditating:
-		player.meditating = false
-		post_message("Nyx breaks her meditation.")
-	player.guarding = false
-	var acted: bool = await attempt_move(player, dir)
-	if acted:
-		if is_instance_valid(player):
-			_try_pickup(player.grid_pos)
-			player.tick_resources()
-			player.tick_skill_cooldowns()
-			_check_special_tiles()
-			var cost := _turn_cost()
-			if cost > 0:
-				advance_time(cost)
-				_maybe_travel_encounter()
-		if current_map != old_map:
-			player._last_held = Vector2i.ZERO
-			await get_tree().create_timer(0.15).timeout
-		if is_instance_valid(player) and player.alive:
-			await _resolve_enemy_turns()
-			turn += 1
-	busy = false
+	TurnEngine.player_action(self, dir)
 
+func player_guard() -> void:
+	TurnEngine.player_guard(self)
+
+func player_wait() -> void:
+	TurnEngine.player_wait(self)
+
+func player_toggle_meditation() -> void:
+	TurnEngine.player_toggle_meditation(self)
+
+func _resolve_enemy_turns() -> void:
+	TurnEngine.resolve_enemy_turns(self)
+
+func _turn_cost() -> int:
+	return TurnEngine._turn_cost(self)
+
+func attempt_move(e: Entity, dir: Vector2i) -> bool:
+	return await TurnEngine.attempt_move(self, e, dir)
+
+func _attack(a: Entity, t: Entity) -> void:
+	TurnEngine.attack(self, a, t)
+
+func _strike(a: Entity, t: Entity, mult: float, is_bolt := false) -> void:
+	TurnEngine.strike(self, a, t, mult, is_bolt)
+
+func _ranged_attack(a: Entity, t: Entity) -> void:
+	TurnEngine.ranged_attack(self, a, t)
+
+func has_clear_line(from: Vector2i, to: Vector2i) -> bool:
+	return TurnEngine.has_clear_line(self, from, to)
+
+func _enemy_near_sight() -> bool:
+	return TurnEngine._enemy_near_sight(self)
+
+func _maybe_travel_encounter() -> void:
+	SpawnSystem.maybe_travel_encounter(self)
+
+func _start_ambush() -> void:
+	SpawnSystem.start_ambush(self)
+
+func _try_flee_ambush() -> bool:
+	return SpawnSystem.try_flee_ambush(self)
+
+func roll_loot(e: Enemy) -> void:
+	SpawnSystem.roll_loot(self, e)
+
+func _free_adjacent_cells(center: Vector2i, count: int) -> Array[Vector2i]:
+	return SpawnSystem.free_adjacent_cells(self, center, count)
+
+func random_open_cell(map_data: MapData) -> Vector2i:
+	return SpawnSystem.random_open_cell(self, map_data)
 
 func _check_special_tiles() -> void:
 	var t := tile_at(player.grid_pos)
@@ -667,76 +629,8 @@ func _open_chest() -> void:
 	if not _gain_item(item):
 		_spawn_ground_item(item, player.grid_pos)
 
-
 func _render_cell(cell: Vector2i) -> void:
 	map.set_cell(cell, 0, Vector2i(TILE_ATLAS[tile_at(cell)], 0))
-
-
-func _maybe_travel_encounter() -> void:
-	if current_depth != 0 or current_map.is_ambush or current_map.is_threshold:
-		return
-	if randf() > 0.12:
-		return
-	var roll := randi_range(0, 2)
-	if roll < 2:
-		_start_ambush()
-	else:
-		var finds: Array[String] = ["potion", "meat"]
-		_spawn_ground_item(ItemDB.make(finds.pick_random(), 2, 1), player.grid_pos)
-		post_message("You spot something half-buried here.")
-
-
-func _start_ambush() -> void:
-	layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
-	var map_data := MapData.new()
-	map_data.is_ambush = true
-	var size := Vector2i(14, 11)
-	map_data.size = size
-	for x in size.x:
-		for y in size.y:
-			var edge := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1
-			map_data.tiles[Vector2i(x, y)] = "wall" if edge else "floor"
-	for i in 4:
-		var c := random_open_cell(map_data)
-		if c != Vector2i.ZERO:
-			map_data.tiles[c] = "wall"
-	map_data.player_spawn = Vector2i(size.x / 2, size.y / 2)
-	map_data.tiles[map_data.player_spawn] = "floor"
-	var ids: Array[String] = ["goblin", "goblin", "archer"]
-	for i in randi_range(2, 3):
-		map_data.enemy_spawns.append({"pos": _rim_cell(map_data), "id": ids.pick_random()})
-	post_message("Ambush! Hostiles close in from all sides!")
-	enter_map(map_data, current_depth)
-
-
-func _rim_cell(map_data: MapData) -> Vector2i:
-	for i in 100:
-		var side := randi_range(0, 3)
-		var c := Vector2i.ZERO
-		match side:
-			0: c = Vector2i(randi_range(1, map_data.size.x - 2), 1)
-			1: c = Vector2i(randi_range(1, map_data.size.x - 2), map_data.size.y - 2)
-			2: c = Vector2i(1, randi_range(1, map_data.size.y - 2))
-			3: c = Vector2i(map_data.size.x - 2, randi_range(1, map_data.size.y - 2))
-		if WALKABLE.has(map_data.tiles.get(c, "wall")) and entity_at(c) == null:
-			return c
-	return Vector2i(1, 1)
-
-
-func _try_flee_ambush() -> bool:
-	if layer_stack.is_empty() or not current_map.is_ambush:
-		return false
-	var on_edge := false
-	for d in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
-		if tile_at(player.grid_pos + d) == "wall":
-			on_edge = true
-			break
-	if not on_edge:
-		return false
-	exit_layer()
-	post_message("Nyx slips away from the ambush!")
-	return true
-
 
 # --- Rest ------------------------------------------------------------------
 
@@ -778,73 +672,6 @@ func player_rest() -> void:
 	elif is_instance_valid(player) and player.alive:
 		post_message("The rest is broken off.")
 	busy = false
-
-func player_guard() -> void:
-	if busy or not is_instance_valid(player) or not player.alive:
-		return
-	busy = true
-	player.guarding = true
-	post_message("Nyx takes a defensive stance.")
-	player.tick_resources(1)
-	advance_time(_turn_cost() if current_depth > 0 else 0)
-	await _resolve_enemy_turns()
-	turn += 1
-	busy = false
-
-
-func player_wait() -> void:
-	if busy or not is_instance_valid(player) or not player.alive:
-		return
-	busy = true
-	post_message("Nyx waits, catching her breath.")
-	player.tick_resources(2)
-	advance_time(_turn_cost() if current_depth > 0 else 0)
-	await _resolve_enemy_turns()
-	turn += 1
-	busy = false
-
-
-func player_toggle_meditation() -> void:
-	if busy or not is_instance_valid(player) or not player.alive:
-		return
-	busy = true
-	player.meditating = not player.meditating
-	if player.meditating:
-		post_message("Nyx begins meditating.")
-		while player.meditating and is_instance_valid(player) and player.alive:
-			player.mana = minf(player.mana + 6.0, player.max_mana())
-			if _enemy_near_sight():
-				player.meditating = false
-				post_message("Nyx senses danger and stops meditating.")
-				break
-			if player.hunger < Player.STARVING_THRESHOLD:
-				player.meditating = false
-				post_message("Nyx is too hungry to focus on meditation.")
-				break
-			if Input.is_key_pressed(KEY_M):
-				player.meditating = false
-				post_message("Nyx stops meditating.")
-				break
-			player.tick_resources()
-			player.tick_skill_cooldowns()
-			advance_time(5)
-			await get_tree().create_timer(0.15).timeout
-			await _resolve_enemy_turns()
-			turn += 1
-	else:
-		post_message("Nyx stops meditating.")
-	busy = false
-
-
-func _enemy_near_sight() -> bool:
-	var radius: int = player.attributes["PER"] / 5 + 2
-	for e in entities:
-		if is_instance_valid(e) and e != player and e.hostile:
-			var d: Vector2i = e.grid_pos - player.grid_pos
-			if absi(d.x) <= radius and absi(d.y) <= radius:
-				return true
-	return false
-
 
 func player_use_item(index: int) -> void:
 	if busy or not is_instance_valid(player) or not player.alive:
@@ -1095,77 +922,3 @@ func shop_sell(v: Villager, index: int) -> void:
 	else:
 		player.inventory.remove_at(index)
 	post_message("You sell the %s for %d g." % [item.display_name(), price])
-
-
-func _resolve_enemy_turns() -> void:
-	_fast = true
-	for e in entities.duplicate():
-		if not is_instance_valid(e) or e == player or not e.alive:
-			continue
-		e.energy += e.speed()
-		var actions := 0
-		while is_instance_valid(e) and e.alive and e.energy >= 100.0 and actions < 8:
-			var cost: int = await e.take_turn()
-			e.energy -= maxf(float(cost), 0.0)
-			actions += 1
-		if is_instance_valid(e):
-			e.tick_resources()
-	_fast = false
-
-
-func attempt_move(e: Entity, dir: Vector2i) -> bool:
-	var target := e.grid_pos + dir
-	var other := entity_at(target)
-	if other != null and other != e:
-		if other is Villager:
-			_talk_to(other)
-			return false
-		if other.hostile != e.hostile:
-			_attack(e, other)
-			await get_tree().create_timer(0.08).timeout
-			return true
-		return false
-	if not is_walkable(target):
-		return false
-	e.grid_pos = target
-	e.slide()
-	await get_tree().create_timer(0.012 if _fast else 0.05).timeout
-	return true
-
-
-func _attack(a: Entity, t: Entity) -> void:
-	var chance: int = clampi(BASE_HIT + a.accuracy() - t.evasion(), 35, 95)
-	if randi_range(0, 99) < chance:
-		var dmg := randi_range(1, a.attack_power())
-		dmg = maxi(1, dmg - t.defense())
-		if randi_range(0, 99) < int(a.attributes.get("LUCK", 10)) / CRIT_DIVISOR:
-			dmg *= 2
-			post_message("CRITICAL! %s tears into the %s for %d!" % [a.display_name, t.display_name, dmg])
-		else:
-			post_message("%s hits %s for %d damage." % [a.display_name, t.display_name, dmg])
-		if t.guarding:
-			dmg = dmg / 2
-			t.guarding = false
-			post_message("%s's guard softens the blow!" % t.display_name)
-		t.take_damage(dmg)
-	else:
-		post_message("%s swings at %s and misses." % [a.display_name, t.display_name])
-		## True if a straight 8-directional line from `from` to `to` is unblocked by walls.
-func has_clear_line(from: Vector2i, to: Vector2i) -> bool:
-	var delta: Vector2i = to - from
-	# Must be a straight line (same row, column, or perfect diagonal).
-	if delta.x != 0 and delta.y != 0 and absi(delta.x) != absi(delta.y):
-		return false
-	var step := Vector2i(signi(delta.x), signi(delta.y))
-	var cell := from + step
-	while cell != to:
-		if not is_walkable(cell):
-			return false
-		cell += step
-	return true
-
-
-## Ranged attack along a clear line; same math as a strike, no facing needed.
-func _ranged_attack(a: Entity, t: Entity) -> void:
-	post_message("The %s looses an arrow at %s!" % [a.display_name, t.display_name])
-	_strike(a, t, 1.0, true)
