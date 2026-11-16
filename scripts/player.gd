@@ -39,7 +39,7 @@ func _init() -> void:
 	}
 	for id in ["power_strike", "cleave", "firebolt", "mend"]:
 		hotbar.append({"kind": "skill", "id": id})
-	while hotbar.size() < 9:
+	while hotbar.size() < 10:
 		hotbar.append({"kind": "none", "id": ""})
 
 
@@ -85,6 +85,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			var idx: int = event.keycode - KEY_1
 			if idx >= 0 and idx < 9:
 				Game.use_hotbar(idx)
+			elif event.keycode == KEY_0:
+				Game.use_hotbar(9)
 
 
 # --- Hunger ---------------------------------------------------------------

@@ -429,6 +429,23 @@ func hotbar_item_lost(id: String) -> void:
 			if player.hotbar[i]["kind"] == "item" and player.hotbar[i]["id"] == id:
 				player.hotbar[i] = {"kind": "none", "id": ""}
 
+func hotbar_clear_slot(index: int) -> void:
+	if index >= player.hotbar.size():
+		return
+	player.hotbar[index] = {"kind": "none", "id": ""}
+
+func hotbar_bind_item(pack_index: int, slot_index: int) -> void:
+	if pack_index >= player.inventory.size() or slot_index >= player.hotbar.size():
+		return
+	player.hotbar[slot_index] = {"kind": "item", "id": player.inventory[pack_index].id}
+
+
+func hotbar_move(from: int, to: int) -> void:
+	if from == to or from >= player.hotbar.size() or to >= player.hotbar.size():
+		return
+	var tmp: Dictionary = player.hotbar[from]
+	player.hotbar[from] = player.hotbar[to]
+	player.hotbar[to] = tmp
 
 func _finish_pickup(g: GroundItem) -> void:
 	ground_items.erase(g.grid_pos)

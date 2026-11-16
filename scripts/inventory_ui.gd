@@ -22,7 +22,7 @@ func _ready() -> void:
 	grid.columns = 5
 	vbox.add_child(grid)
 	var hint := Label.new()
-	hint.text = "Click: use/equip   Right-click: drop   Hover: inspect   I/Esc: close"
+	hint.text = "Click: use/equip   Right-click: drop   Drag to hotbar: bind   I/Esc: close"
 	vbox.add_child(hint)
 
 
@@ -60,7 +60,7 @@ func _refresh() -> void:
 		c.queue_free()
 	for i in p.inventory.size():
 		var item: Item = p.inventory[i]
-		var slot := _make_slot(item, p.inventory[i].count if item.stackable() else 0)
+		var slot := _make_slot(item)
 		var idx := i
 		slot.pressed.connect(func() -> void:
 			Game.player_use_item(idx)
@@ -69,31 +69,45 @@ func _refresh() -> void:
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_RIGHT:
 				Game.drop_item(idx)
 				_refresh())
+		slot.set_drag_forwarding(
+			func(_pos: Vector2) -> Variant:
+				var preview := ColorRect.new()
+				preview.color = item.color()
+				preview.custom_minimum_size = Vector2(40, 40)
+				slot.set_drag_preview(preview)
+				return {"from_pack": idx},
+			func(_pos: Vector2, _data: Variant) -> bool:
+				return true,
+			func(_pos: Vector2, _data: Variant) -> void:
+				pass)
 		grid.add_child(slot)
-	for i in (5 - p.inventory.size() % 5) if p.inventory.size() % 5 != 0 else 0:
+	var leftover := (5 - p.inventory.size() % 5) if p.inventory.size() % 5 != 0 else 0
+	for i in leftover:
 		grid.add_child(_empty_slot())
 
 
-func _make_slot(item: Item, stack: int) -> Button:
+func _make_slot(item: Item) -> Button:
 	var btn := Button.new()
 	btn.custom_minimum_size = Vector2(56, 56)
+	btn.focus_mode = Control.FOCUS_NONE
 	btn.tooltip_text = item.tooltip_text()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = item.color().darkened(0.35)
 	sb.set_corner_radius_all(8)
-	sb.set_border_width_all(2)
 	sb.border_color = Color(0.9, 0.8, 0.4).lerp(Color(0.5, 0.5, 0.55), float(6 - item.quality) / 6.0)
+	sb.set_border_width_all(2)
 	btn.add_theme_stylebox_override("normal", sb)
 	btn.add_theme_stylebox_override("hover", sb)
 	btn.add_theme_stylebox_override("pressed", sb)
-	if stack > 0:
-		btn.text = "x%d" % stack
+	if item.stackable():
+		btn.text = "x%d" % item.count
 	return btn
 
 
 func _empty_slot() -> Button:
 	var btn := Button.new()
 	btn.custom_minimum_size = Vector2(56, 56)
+	btn.focus_mode = Control.FOCUS_NONE
 	btn.disabled = true
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.12, 0.12, 0.14)

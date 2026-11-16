@@ -66,3 +66,8 @@
 - Arrows 8-dir, 1-9 hotbar, G guard, X wait, R rest, M meditate,
   Enter interact, I pack, C character, Ctrl+S save, Ctrl+L load,
   Ctrl+N new game, F1 grid (debug_grid.gd on Main.tscn)
+
+## UI guard order (LOCKED RULE):
+- In _unhandled_input: the OPEN/TOGGLE key is checked BEFORE any
+  "if not is_open: return" guard — the open-key must never be
+  eaten by the closed-state guard. Esc/close only works when open.

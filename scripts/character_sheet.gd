@@ -93,12 +93,14 @@ func _doll_layer_rect(path) -> TextureRect:
 
 func _slot_button() -> Button:
 	var btn := Button.new()
+	btn.focus_mode = Control.FOCUS_NONE
 	btn.custom_minimum_size = Vector2(110, 40)
 	return btn
 
 
 func _future_slot(slot_name: String) -> Button:
 	var btn := Button.new()
+	btn.focus_mode = Control.FOCUS_NONE
 	btn.text = "—"
 	btn.disabled = true
 	btn.tooltip_text = "%s slot: comes with the gear expansion." % slot_name
@@ -123,8 +125,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if Game.dialogue_open:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_C and not Game.inventory_open:
-			toggle()
+		if event.keycode == KEY_C:
+			if is_open:
+				close()
+			elif not Game.inventory_open:
+				toggle()
+		elif is_open and event.keycode == KEY_ESCAPE:
+			close()
 		elif is_open and event.keycode == KEY_ESCAPE:
 			close()
 

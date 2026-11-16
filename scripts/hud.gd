@@ -9,7 +9,8 @@ var hotbar_label: Label
 var inv_label: Label
 var log_label: Label
 var quests_label: Label
-
+var hotbar := HotbarUi.new()
+	
 
 func _ready() -> void:
 	var panel := PanelContainer.new()
@@ -41,6 +42,7 @@ func _ready() -> void:
 	add_child(inv_ui)
 	var sheet := CharacterSheet.new()
 	add_child(sheet)
+	add_child(hotbar)
 
 
 func _process(_delta: float) -> void:
