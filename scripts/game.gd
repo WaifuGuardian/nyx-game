@@ -11,8 +11,6 @@ const WALKABLE: Array[String] = ["floor", "door", "stairs_down", "stairs_up",
 	"grass", "plains", "woods", "dungeon_entrance", "town",
 	"campfire", "water_floor", "lore_tablet"]
 const SLOW_TILES: Array[String] = ["woods", "plains"]
-const BASE_HIT := 75
-const CRIT_DIVISOR := 3  # LUCK / this = crit chance %
 const LORE_LINES: Array[String] = [
 	"\"...the woods breathe when the bell rings. Count the breaths.\"",
 	"Scratched into the stone: \"DEEPER = RICHER. ALSO DEADLIER. - a previous delve\"",

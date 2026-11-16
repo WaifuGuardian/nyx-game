@@ -14,18 +14,24 @@
 - M6.1 Town: neverwinter (enterable), NPC dialogue (VN box), shop with
   buy/sell, gold economy, loot drops, boss (Warchief) with special drops,
   chests, skills + hotbar, crits (LUCK)
-
+- Dialogue choices + affinity: Flirt/Gift/Quest/Trade menu (spec'd,
+  sees NpcDB "topics" field; quest option stubs until quests exist)
+- Dungeon generator v2: room types (fight/loot/trap/rest), boss placement
+- Quest system: fetch/kill/explore/craft types, timers as fail condition,
+  markers (?, grey, green !), rewards as data
 ## IN PROGRESS
 - (nothing — milestone boundary)
 
 ## NEXT (pick in any order)
-- Dialogue choices + affinity: Flirt/Gift/Quest/Trade menu (spec'd,
-  sees NpcDB "topics" field; quest option stubs until quests exist)
-- Quest system: fetch/kill/explore/craft types, timers as fail condition,
-  markers (?, grey, green !), rewards as data
-- Dungeon generator v2: room types (fight/loot/trap/rest), boss placement
 - Art pass 1: Mira/Bram/townsperson faces, Y-sort, tile size decision
   (16 vs 32 — waiting on artist's native grain), real icons
+- Proper Main Menu, with a "start new game", "load game" and "exit" buttons, as well as settings later on
+- An ui improvement. A proper backpack one can drag things around in and click on items to "equip/use", "Inspect", "drop" etc
+- Another UI improvement. Make a menu for the game. One where you can see your skills, journal, quests, status, as well as a load game button.
+- Make proper hotkeys. You have button 1-10 that you can use at the bottom of your screen, and you can drag food, items and spells/skills to 
+quick use them from the hotkey.
+-Make it so you can attack with clicking, rather than walking into enemies. Ranged attacks can be shot within a certain range of you at an enemy
+of your choosing rather than require a straight line.
 
 ## LATER (specced in design doc)
 - NPC schedules, karma/crime/fame, dialogue topic trees, cooking with
