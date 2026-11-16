@@ -4,13 +4,21 @@ extends Node
 const TILE := 16
 const TILE_ATLAS := {"floor": 0, "wall": 1, "door": 2, "stairs_down": 3, "stairs_up": 4,
 	"grass": 0, "plains": 5, "woods": 6, "mountain": 7, "water": 8, "dungeon_entrance": 9,
-	"town": 10, "chest": 11, "chest_open": 12}
+	"town": 10, "chest": 11, "chest_open": 12, "campfire": 13, "water_floor": 14,
+	"lore_tablet": 15}
 const WALKABLE: Array[String] = ["floor", "door", "stairs_down", "stairs_up",
-	"grass", "plains", "woods", "dungeon_entrance", "town"]
+	"grass", "plains", "woods", "dungeon_entrance", "town",
+	"campfire", "water_floor", "lore_tablet"]
 const SLOW_TILES: Array[String] = ["woods", "plains"]
 const BASE_HIT := 75
 const CRIT_DIVISOR := 3  # LUCK / this = crit chance %
 const SAVE_PATH := "user://savegame.json"
+const LORE_LINES: Array[String] = [
+	"\"...the woods breathe when the bell rings. Count the breaths.\"",
+	"Scratched into the stone: \"DEEPER = RICHER. ALSO DEADLIER. - a previous delve\"",
+	"\"The bone merchant prices in your survival, not your gold.\"",
+	"Someone tall, in charcoal: \"Nine rooms, nine doors, one way out.\"",
+]
 
 signal message_posted(text: String)
 signal time_passed(minutes: int)
@@ -465,7 +473,7 @@ func _render_map(map_data: MapData) -> void:
 	add_child(map)
 	for cell in map_data.tiles:
 		var id: String = map_data.tiles[cell]
-		map.set_cell(cell, 0, Vector2i(TILE_ATLAS[id], 0))
+		map.set_cell(cell, 0, Vector2i(TILE_ATLAS.get(id, 0), 0))   # .get with default
 
 
 func tile_at(cell: Vector2i) -> String:
@@ -477,31 +485,7 @@ func is_walkable(cell: Vector2i) -> bool:
 
 
 func generate_floor(depth: int) -> MapData:
-	var map_data := MapData.new()
-	var size := Vector2i(40, 25)
-	map_data.size = size
-	for x in size.x:
-		for y in size.y:
-			var cell := Vector2i(x, y)
-			var wall := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1 or randf() < 0.08
-			map_data.tiles[cell] = "wall" if wall else "floor"
-	map_data.tiles[random_open_cell(map_data)] = "floor"
-	map_data.player_spawn = random_open_cell(map_data)
-	map_data.tiles[map_data.player_spawn] = "floor"
-	map_data.tiles[random_open_cell(map_data)] = "stairs_down"
-	map_data.tiles[random_open_cell(map_data)] = "stairs_up"
-	var pool: Array[String] = ["goblin", "goblin", "archer"]
-	if depth >= 3:
-		pool.append("knight")
-	for i in 5 + depth:
-		map_data.enemy_spawns.append({"pos": random_open_cell(map_data), "id": pool.pick_random()})
-	for i in 2:
-		map_data.item_spawns.append({"pos": random_open_cell(map_data), "id": "potion", "quality": 2, "count": 1})
-	map_data.item_spawns.append({"pos": random_open_cell(map_data), "id": "meat", "quality": 2, "count": 2})
-	if depth >= 2:
-		map_data.tiles[random_open_cell(map_data)] = "chest"
-	return map_data
-
+	return DungeonGenerator.generate_floor(depth)
 
 func random_open_cell(map_data: MapData) -> Vector2i:
 	for i in 200:
@@ -551,6 +535,9 @@ func _make_tiles_texture() -> ImageTexture:
 					10: base = Color(0.55, 0.4, 0.35) if (x + y) % 3 != 0 else Color(0.48, 0.35, 0.3)
 					11: base = Color(0.45, 0.32, 0.15) if y < 3 or y > TILE - 4 else Color(0.65, 0.5, 0.2)
 					12: base = Color(0.3, 0.22, 0.1) if y < 5 else Color(0.2, 0.15, 0.08)
+					13: base = Color(0.35, 0.2, 0.1) if (x + y) % 4 != 0 else Color(0.9, 0.5, 0.1)  # campfire: dark ring, flame flecks
+					14: base = Color(0.25, 0.35, 0.5) if (x + y) % 2 == 0 else Color(0.22, 0.31, 0.45)  # dungeon water
+					15: base = Color(0.4, 0.42, 0.45) if y % 4 != 0 else Color(0.28, 0.3, 0.33)  # etched tablet
 				img.set_pixel(i * TILE + x, y, base)
 	for x in range(4, 12):
 		img.set_pixel(3 * TILE + x, 7, Color(0.7, 0.7, 0.75))
@@ -749,6 +736,8 @@ func player_interact() -> void:
 			post_message("Nyx enters Neverwinter.")
 			await get_tree().create_timer(0.15).timeout
 			busy = false
+		"lore_tablet":
+			post_message(LORE_LINES.pick_random())
 		"chest":
 			_open_chest()
 		"chest_open":
@@ -873,7 +862,8 @@ func player_rest() -> void:
 		player.hp = mini(player.hp + maxi(1, player.max_hp() / chunks), player.max_hp())
 		player.mana = minf(player.mana + player.max_mana() / float(chunks), player.max_mana())
 		player.stamina = minf(player.stamina + 100.0 / float(chunks), 100.0)
-		if randf() < 0.03:
+		var interrupt_chance := 0.005 if tile_at(player.grid_pos) == "campfire" else 0.03
+		if randf() < interrupt_chance:
 			post_message("Nyx is roused by a sound in the night!")
 			_spawn_rest_ambush()
 			interrupted = true
