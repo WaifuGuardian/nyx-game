@@ -45,6 +45,18 @@ const DEFS: Dictionary = {
 			{"id": "scroll_flames", "quality": 2, "count": 2},
 		],
 	},
+	"bone_merchant": {
+		"name": "The Bone Merchant",
+		"color": Color(0.92, 0.9, 0.8),
+		"face": "res://art/faces/bone_merchant.png",
+		"root": {
+			"text": "A skeletal figure counts coins it cannot spend. \"Wares, delve-walker. Few climb down far enough to see them.\"",
+			"options": [
+				{"label": "Trade", "effect": "shop"},
+				{"label": "Leave", "effect": "end"},
+			],
+		},
+	},
 	"townsperson": {
 		"name": "Townsperson",
 		"color": Color(0.7, 0.7, 0.65),

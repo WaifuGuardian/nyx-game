@@ -21,12 +21,12 @@ var _last_held := Vector2i.ZERO
 
 func _init() -> void:
 	display_name = "Nyx"
-	attributes["STR"] = 20
-	attributes["CON"] = 20
-	attributes["DEX"] = 20
-	attributes["WIL"] = 20
-	attributes["PER"] = 20
-	attributes["LUCK"] = 20
+	attributes["STR"] = 40
+	attributes["CON"] = 40
+	attributes["DEX"] = 40
+	attributes["WIL"] = 40
+	attributes["PER"] = 40
+	attributes["LUCK"] = 40
 	token_size = 1.5
 	show_ring = false
 	ring_color = Color(0.85, 0.7, 0.3)

@@ -5,7 +5,7 @@ const TILE := 16
 const TILE_ATLAS := {"floor": 0, "wall": 1, "door": 2, "stairs_down": 3, "stairs_up": 4,
 	"grass": 0, "plains": 5, "woods": 6, "mountain": 7, "water": 8, "dungeon_entrance": 9,
 	"town": 10, "chest": 11, "chest_open": 12, "campfire": 13, "water_floor": 14,
-	"lore_tablet": 15}
+	"lore_tablet": 15,  "vault_door": 16, "vault_open": 17}
 const WALKABLE: Array[String] = ["floor", "door", "stairs_down", "stairs_up",
 	"grass", "plains", "woods", "dungeon_entrance", "town",
 	"campfire", "water_floor", "lore_tablet"]
@@ -45,7 +45,7 @@ var quests: Dictionary = {}       # quest_id -> progress
 var quests_done: Array[String] = []
 var dungeon_cache: Dictionary = {}   # instance_id -> {"floors": {depth: MapData}, "stamp": int}
 var dungeon_instance := ""           # id of the dungeon we're currently inside ("" = surface)
-
+var _fast := false   # true while the enemy phase resolves: minimal animation waits
 
 func post_message(text: String) -> void:
 	message_log.append(text)
@@ -305,6 +305,9 @@ func _map_to_dict(m: MapData) -> Dictionary:
 	var npcs := []
 	for s in m.npc_spawns:
 		npcs.append({"pos": [s["pos"].x, s["pos"].y], "id": s["id"]})
+	var dungeons := []
+	for e in m.dungeon_entrances:
+		dungeons.append({"pos": [e["pos"].x, e["pos"].y], "id": e["dungeon_id"]})
 	var items := []
 	for cell in ground_items:
 		var g: GroundItem = ground_items[cell]
@@ -319,6 +322,7 @@ func _map_to_dict(m: MapData) -> Dictionary:
 		"npc_spawns": npcs,
 		"item_spawns": items,
 		"is_ambush": m.is_ambush,
+		"dungeon_entrances": dungeons,
 	}
 
 
@@ -335,6 +339,11 @@ func _dict_to_map(d: Dictionary) -> MapData:
 		m.enemy_spawns.append({"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])), "id": s["id"]})
 	for s in d.get("npc_spawns", []):
 		m.npc_spawns.append({"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])), "id": s["id"]})
+	for s in d.get("dungeon_entrances", []):
+		m.dungeon_entrances.append({
+			"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])),
+			"dungeon_id": s["dungeon_id"],
+		})
 	for s in d["item_spawns"]:
 		m.item_spawns.append({
 			"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])),
@@ -437,6 +446,14 @@ func enter_dungeon(path: String, instance_id := "") -> void:
 		dungeon_instance = instance_id
 		var inst: Dictionary = dungeon_cache.get(instance_id, {})
 		if inst.is_empty():
+			var merchant_floor := -1
+			var vault_floor := -1
+			if randf() < 0.4:
+				merchant_floor = randi_range(3, 7)
+				if randf() < 0.5:
+					vault_floor = merchant_floor + randi_range(0, 2)
+			inst = {"floors": {}, "stamp": 0, "merchant_floor": merchant_floor, "vault_floor": vault_floor}
+			dungeon_cache[instance_id] = inst
 			post_message("A fresh darkness. This dungeon is new to you.")
 		elif _abs_time() - int(inst.get("stamp", 0)) > DUNGEON_GRACE_MINUTES:
 			dungeon_cache.erase(instance_id)
@@ -479,6 +496,8 @@ func enter_map(map_data: MapData, depth: int) -> void:
 		v.set_face(v.def.get("face", ""))
 		if v.def.has("stock"):
 			v.stock = v.def["stock"].duplicate(true)
+		if v.npc_id == "bone_merchant":          # <- add these two
+			v.stock = _bone_merchant_stock()    # <- (his stock is dynamic)
 		v.grid_pos = s["pos"]
 		_register(v)
 	for s in map_data.item_spawns:
@@ -487,6 +506,7 @@ func enter_map(map_data: MapData, depth: int) -> void:
 		g.grid_pos = s["pos"]
 		ground_items[g.grid_pos] = g
 		add_child(g)
+	
 	player.grid_pos = map_data.player_spawn
 	player.snap()
 
@@ -517,7 +537,11 @@ func _render_map(map_data: MapData) -> void:
 
 func tile_at(cell: Vector2i) -> String:
 	return current_map.tiles.get(cell, "wall")
-
+func _dungeon_id_at(cell: Vector2i) -> String:
+	for e in current_map.dungeon_entrances:
+		if e["pos"] == cell:
+			return e["dungeon_id"]
+	return ""
 
 func is_walkable(cell: Vector2i) -> bool:
 	return WALKABLE.has(tile_at(cell))
@@ -577,6 +601,8 @@ func _make_tiles_texture() -> ImageTexture:
 					13: base = Color(0.35, 0.2, 0.1) if (x + y) % 4 != 0 else Color(0.9, 0.5, 0.1)  # campfire: dark ring, flame flecks
 					14: base = Color(0.25, 0.35, 0.5) if (x + y) % 2 == 0 else Color(0.22, 0.31, 0.45)  # dungeon water
 					15: base = Color(0.4, 0.42, 0.45) if y % 4 != 0 else Color(0.28, 0.3, 0.33)  # etched tablet
+					16: base = Color(0.2, 0.2, 0.24) if y < 3 or y > TILE - 4 else Color(0.3, 0.28, 0.3)
+					17: base = Color(0.12, 0.12, 0.14) if y < 5 else Color(0.2, 0.18, 0.16)
 				img.set_pixel(i * TILE + x, y, base)
 	for x in range(4, 12):
 		img.set_pixel(3 * TILE + x, 7, Color(0.7, 0.7, 0.75))
@@ -588,6 +614,9 @@ func _make_tiles_texture() -> ImageTexture:
 	# chest gold band
 	for x in range(2, 14):
 		img.set_pixel(11 * TILE + x, 7, Color(0.9, 0.8, 0.3))
+	# vault door keyhole
+	for x in range(6, 10):
+		img.set_pixel(16 * TILE + x, 7, Color(0.9, 0.8, 0.3))
 	return ImageTexture.create_from_image(img)
 
 
@@ -740,7 +769,17 @@ func _check_special_tiles() -> void:
 		"stairs_up":
 			post_message("Stairs lead back up. (Enter to climb)")
 		"dungeon_entrance":
-			post_message("A dark maw opens in the hillside. (Enter to enter)")
+			if current_map.is_threshold:
+				post_message("The door hums with cold air. (Enter to descend)")
+			else:
+				var hint := ""
+				var inst: Dictionary = dungeon_cache.get(_dungeon_id_at(player.grid_pos), {})
+				if inst.is_empty():
+					post_message("A dark maw opens in the hillside. What waits below is undecided. (Enter to approach)")
+				elif int(inst.get("merchant_floor", -1)) != -1:
+					post_message("A dark maw opens in the hillside... and something like old coin drifts up from below. (Enter to approach)")
+				else:
+					post_message("A dark maw opens in the hillside. The dark below smells of nothing at all. (Enter to approach)")
 		"town":
 			post_message("The town of Neverwinter. The gates stand open. (Enter to visit)")
 
@@ -766,11 +805,9 @@ func player_interact() -> void:
 				next_map = floors[current_depth + 1]
 				post_message("The dungeon remembers this floor.")
 			else:
-				next_map = DungeonGenerator.generate_floor(current_depth + 1)
-				if dungeon_instance != "":
-					floors[current_depth + 1] = next_map
-					inst["floors"] = floors
-					dungeon_cache[dungeon_instance] = inst
+				var mf: int = int(inst.get("merchant_floor", -1))
+				var vf: int = int(inst.get("vault_floor", -1))
+				next_map = DungeonGenerator.generate_floor(current_depth + 1, mf, vf)
 			enter_map(next_map, current_depth + 1)
 			post_message("Nyx descends to floor %d." % current_depth)
 			await get_tree().create_timer(0.15).timeout
@@ -789,8 +826,9 @@ func player_interact() -> void:
 			busy = false
 		"dungeon_entrance":
 			busy = true
+			var did: String = _dungeon_id_at(player.grid_pos)
 			if current_map.is_threshold:
-				enter_dungeon("res://maps/woods_dungeon.txt", "woods_dungeon")
+				enter_dungeon("res://maps/woods_dungeon.txt", did)
 				post_message("Nyx enters the woods dungeon.")
 			else:
 				layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
@@ -813,6 +851,19 @@ func player_interact() -> void:
 			_open_chest()
 		"chest_open":
 			post_message("Empty. Someone got here first — probably you.")
+		"vault_door":                              # <- add from here...
+			if player.count_item("vault_key") >= 1:
+				player.consume_item("vault_key", 1)
+				current_map.tiles[player.grid_pos] = "vault_open"
+				_render_cell(player.grid_pos)
+				post_message("The key turns. The vault breathes out cold, old air...")
+				for i in randi_range(2, 3):
+					var pool: Array[String] = ["potion_major", "sword", "armor_leather", "scroll_flames"]
+					var item := ItemDB.make(pool.pick_random(), randi_range(3, 5), 1)
+					if not _gain_item(item):
+						_spawn_ground_item(item, player.grid_pos)
+			else:
+				post_message("Locked tight. Somewhere down here, something sells the key.")
 		_:
 			post_message("There is nothing to interact with here.")
 
@@ -1073,6 +1124,16 @@ func _talk_to(v: Villager) -> void:
 		shop_ui.open_shop(v)
 	else:
 		dialogue_ui.open(v.display_name, v.def["dialogue"])
+func _bone_merchant_stock() -> Array:
+	var stock: Array = [
+		{"id": "potion_major", "quality": 3, "count": 3},
+		{"id": "scroll_flames", "quality": 3, "count": 2},
+		{"id": "sword", "quality": 4, "count": 1},
+	]
+	var inst: Dictionary = dungeon_cache.get(dungeon_instance, {})
+	if int(inst.get("vault_floor", -1)) != -1:
+		stock.append({"id": "vault_key", "quality": 2, "count": 1})
+	return stock
 func get_affinity(npc_id: String) -> int:
 	return affinity.get(npc_id, 0)
 
@@ -1260,6 +1321,7 @@ func shop_sell(v: Villager, index: int) -> void:
 
 
 func _resolve_enemy_turns() -> void:
+	_fast = true
 	for e in entities.duplicate():
 		if not is_instance_valid(e) or e == player or not e.alive:
 			continue
@@ -1271,6 +1333,7 @@ func _resolve_enemy_turns() -> void:
 			actions += 1
 		if is_instance_valid(e):
 			e.tick_resources()
+	_fast = false
 
 
 func attempt_move(e: Entity, dir: Vector2i) -> bool:
@@ -1289,7 +1352,7 @@ func attempt_move(e: Entity, dir: Vector2i) -> bool:
 		return false
 	e.grid_pos = target
 	e.slide()
-	await get_tree().create_timer(0.08).timeout
+	await get_tree().create_timer(0.012 if _fast else 0.05).timeout
 	return true
 
 

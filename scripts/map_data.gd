@@ -12,3 +12,4 @@ var npc_spawns: Array = []    # [{"pos": Vector2i, "id": String}]
 var item_spawns: Array = []   # [{"pos": Vector2i, "id": String, "quality": int, "count": int}]
 var is_ambush := false
 var is_threshold := false
+var dungeon_entrances: Array = []   # [{"pos": Vector2i, "dungeon_id": String}]

@@ -10,6 +10,9 @@ const TILE_CHARS := {
 const ENEMY_CHARS := {"g": "goblin", "a": "archer", "k": "knight", "B": "warchief"}
 const NPC_CHARS := {"V": "elder", "S": "shopkeep", "P": "townsperson"}
 const ITEM_CHARS := {"!": "potion", "?": "scroll_flames", ")": "sword", "[": "armor_leather", "%": "meat"}
+const DUNGEON_CHARS := {
+	"D": "woods_dungeon",
+}
 
 
 static func load(path: String) -> MapData:
@@ -51,6 +54,9 @@ static func load(path: String) -> MapData:
 			elif ITEM_CHARS.has(ch):
 				map.tiles[pos] = "floor"
 				map.item_spawns.append({"pos": pos, "id": ITEM_CHARS[ch], "quality": 2, "count": 1})
+			elif DUNGEON_CHARS.has(ch):
+				map.tiles[pos] = "dungeon_entrance"
+				map.dungeon_entrances.append({"pos": pos, "dungeon_id": DUNGEON_CHARS[ch]})
 			else:
 				map.tiles[pos] = "wall"  # spaces and anything unknown
 	return map

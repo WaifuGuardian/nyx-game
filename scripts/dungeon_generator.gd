@@ -6,7 +6,7 @@ const MIN_ROOMS := 7
 const MAX_ROOMS := 10
 
 
-static func generate_floor(depth: int) -> MapData:
+static func generate_floor(depth: int, merchant_floor := -1, vault_floor := -1) -> MapData:
 	var map_data := MapData.new()
 	var size := Vector2i(48, 30)
 	map_data.size = size
@@ -78,7 +78,13 @@ static func generate_floor(depth: int) -> MapData:
 					map_data.enemy_spawns.append({
 						"pos": _room_cell(room["cells"], map_data),
 						"id": pool.pick_random()})
-
+# --- 4.5 The bone merchant and his vault (pre-rolled by the instance) ---
+	if depth == merchant_floor:
+		var mroom: Dictionary = rooms[randi_range(1, rooms.size() - 2)]
+		map_data.npc_spawns.append({"pos": _room_cell(mroom["cells"], map_data), "id": "bone_merchant"})
+	if depth == vault_floor:
+		var vroom: Dictionary = rooms[randi_range(1, rooms.size() - 2)]
+		map_data.tiles[_room_cell(vroom["cells"], map_data)] = "vault_door"
 	# --- 5. Flavour ---
 	if rooms.size() >= 6 and randf() < 0.4:
 		var mid_room: Dictionary = rooms[randi_range(1, rooms.size() - 2)]

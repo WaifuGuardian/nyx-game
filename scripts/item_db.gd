@@ -57,6 +57,11 @@ const DEFS: Dictionary = {
 		"doll_layer": "res://art/doll/nyxs_skirt.png",
 		"color": Color(0.55, 0.35, 0.3),
 	},
+	"vault_key": {
+		"name": "Vault Key", "kind": "key",
+		"value": 150, "weight": 1, "stack": false,
+		"color": Color(0.85, 0.8, 0.6),
+	},
 }
 
 
