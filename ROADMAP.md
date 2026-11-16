@@ -16,8 +16,8 @@
   chests, skills + hotbar, crits (LUCK)
 - Dialogue choices + affinity: Flirt/Gift/Quest/Trade menu (spec'd,
   sees NpcDB "topics" field; quest option stubs until quests exist)
-- Dungeon generator v2: room types (fight/loot/trap/rest), boss placement
-- Quest system: fetch/kill/explore/craft types, timers as fail condition,
+- Dungeon generator v2: room types (fight/loot/rest), boss placement
+- Quest system: fetch/kill, timers as fail condition,
   markers (?, grey, green !), rewards as data
 ## IN PROGRESS
 - (nothing — milestone boundary)
@@ -32,19 +32,21 @@
 quick use them from the hotkey.
 -Make it so you can attack with clicking, rather than walking into enemies. Ranged attacks can be shot within a certain range of you at an enemy
 of your choosing rather than require a straight line.
-
+- Actual tilemaps for dungeons+town+overworld
+- Dungeon creation tools for pregenerated dungeons
 ## LATER (specced in design doc)
 - NPC schedules, karma/crime/fame, dialogue topic trees, cooking with
   ingredient inheritance, spellcrafting, recruitment/companions, romance,
   outfits, faith, identification, weather/seasons, fast travel, noise,
   home plots, save slot screen with thumbnails, tutorial (diegetic),
   status effects, targeting UI, drowsiness/sanity, death screen polish
-
+- Character creation. choosing a set stat array or allocating your own. Choosing one or more starting skills, passives, etc
+-explore/craft types of quests
+trap rooms + other type of rooms. comes in dungeon v3
 ## CONVENTIONS
 - Never paste a full file without Ctrl+A first
 - Verify FEATURES.md after every full-file replacement
 - One change -> run -> next change
 - New class_name? Save, then Project -> Reload Current Project if anything
   says "not declared"
-- Balance knobs live in: SkillDB (costs/cooldowns/mults), game.gd top
-  (BASE_HIT, CRIT_DIVISOR), EnemyDB (attributes/morale/drops)
+- Balance knobs live in: SkillDB (costs/cooldowns/mults), Base hit and hit divisor in turn_engine.db, EnemyDB (attributes/morale/drops).
