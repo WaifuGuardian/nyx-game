@@ -74,12 +74,12 @@ func advance_time(minutes: int) -> void:
 				post_message("Starvation gnaws at Nyx. (-1 HP)")
 				player.take_damage(1)
 	time_passed.emit(minutes)
-func _abs_time() -> int:
-	return day * 1440 + world_minutes
+
 
 func clock_text() -> String:
 	return "Day %d  %02d:%02d" % [day, world_minutes / 60, world_minutes % 60]
-
+func _abs_time() -> int:
+	return day * 1440 + world_minutes
 
 func new_game() -> void:
 	player = Player.new()
@@ -245,6 +245,8 @@ func save_game() -> void:
 		"affinity": affinity,
 		"quests": quests,
 		"quests_done": quests_done,
+		"dungeon_cache": _cache_to_dicts(),
+		"dungeon_instance": dungeon_instance,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -280,12 +282,12 @@ func load_game() -> void:
 	quests_done = []
 	for q in data.get("quests_done", []):
 		quests_done.append(q)
+	_cache_from_dicts(data.get("dungeon_cache", {}))
+	dungeon_instance = data.get("dungeon_instance", "")
 	layer_stack = _stack_from_dicts(data["layer_stack"])
 	enter_map(_dict_to_map(data["current_map"]), int(data["depth"]))
 	_player_from_dict(data["player"])
 	post_message("The world returns to Nyx, as she left it.")
-	_cache_from_dicts(data.get("dungeon_cache", {}))
-	dungeon_instance = data.get("dungeon_instance", "")
 
 
 func _item_to_dict(it: Item) -> Dictionary:
@@ -788,11 +790,9 @@ func player_interact() -> void:
 		"dungeon_entrance":
 			busy = true
 			if current_map.is_threshold:
-				# We're in the threshold, standing on the dungeon door: descend.
 				enter_dungeon("res://maps/woods_dungeon.txt", "woods_dungeon")
 				post_message("Nyx enters the woods dungeon.")
 			else:
-				# Overworld entrance: step into the threshold.
 				layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
 				var threshold := AsciiMapLoader.load("res://maps/woods_threshold.txt")
 				threshold.is_threshold = true
