@@ -19,6 +19,7 @@ const LORE_LINES: Array[String] = [
 	"\"The bone merchant prices in your survival, not your gold.\"",
 	"Someone tall, in charcoal: \"Nine rooms, nine doors, one way out.\"",
 ]
+const DUNGEON_GRACE_MINUTES := 1440   # 24 in-game hours before the dungeon forgets
 
 signal message_posted(text: String)
 signal time_passed(minutes: int)
@@ -42,6 +43,8 @@ var dialogue_ui: DialogueUi
 var shop_ui: ShopUi
 var quests: Dictionary = {}       # quest_id -> progress
 var quests_done: Array[String] = []
+var dungeon_cache: Dictionary = {}   # instance_id -> {"floors": {depth: MapData}, "stamp": int}
+var dungeon_instance := ""           # id of the dungeon we're currently inside ("" = surface)
 
 
 func post_message(text: String) -> void:
@@ -71,7 +74,8 @@ func advance_time(minutes: int) -> void:
 				post_message("Starvation gnaws at Nyx. (-1 HP)")
 				player.take_damage(1)
 	time_passed.emit(minutes)
-
+func _abs_time() -> int:
+	return day * 1440 + world_minutes
 
 func clock_text() -> String:
 	return "Day %d  %02d:%02d" % [day, world_minutes / 60, world_minutes % 60]
@@ -280,6 +284,8 @@ func load_game() -> void:
 	enter_map(_dict_to_map(data["current_map"]), int(data["depth"]))
 	_player_from_dict(data["player"])
 	post_message("The world returns to Nyx, as she left it.")
+	_cache_from_dicts(data.get("dungeon_cache", {}))
+	dungeon_instance = data.get("dungeon_instance", "")
 
 
 func _item_to_dict(it: Item) -> Dictionary:
@@ -397,6 +403,24 @@ func _stack_from_dicts(arr: Array) -> Array:
 		})
 	return out
 
+func _cache_to_dicts() -> Dictionary:
+	var out := {}
+	for id in dungeon_cache:
+		var floors := {}
+		for depth in dungeon_cache[id]["floors"]:
+			floors[str(depth)] = _map_to_dict(dungeon_cache[id]["floors"][depth])
+		out[id] = {"floors": floors, "stamp": dungeon_cache[id]["stamp"]}
+	return out
+
+
+func _cache_from_dicts(d: Dictionary) -> void:
+	dungeon_cache = {}
+	for id in d:
+		var floors := {}
+		for depth in d[id]["floors"]:
+			floors[int(depth)] = _dict_to_map(d[id]["floors"][depth])
+		dungeon_cache[id] = {"floors": floors, "stamp": int(d[id]["stamp"])}
+
 
 # --- Map handling ---------------------------------------------------------
 
@@ -405,11 +429,20 @@ func enter_overworld() -> void:
 	enter_map(overworld, 0)
 
 
-func enter_dungeon(path: String) -> void:
+func enter_dungeon(path: String, instance_id := "") -> void:
 	layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
+	if instance_id != "":
+		dungeon_instance = instance_id
+		var inst: Dictionary = dungeon_cache.get(instance_id, {})
+		if inst.is_empty():
+			post_message("A fresh darkness. This dungeon is new to you.")
+		elif _abs_time() - int(inst.get("stamp", 0)) > DUNGEON_GRACE_MINUTES:
+			dungeon_cache.erase(instance_id)
+			post_message("The entrance has shifted. This is not the same dungeon you left.")
+		else:
+			post_message("The dungeon remembers you.")
 	var dungeon := AsciiMapLoader.load(path)
 	enter_map(dungeon, 1)
-	post_message("Nyx enters the woods dungeon.")
 
 
 func exit_layer() -> void:
@@ -419,7 +452,11 @@ func exit_layer() -> void:
 	enter_map(layer["map"], layer["depth"])
 	player.grid_pos = layer["return_cell"]
 	player.snap()
-	post_message("Nyx returns to the overworld.")
+	if layer["depth"] == 0 and dungeon_instance != "":
+		if dungeon_cache.has(dungeon_instance):
+			dungeon_cache[dungeon_instance]["stamp"] = _abs_time()
+		dungeon_instance = ""
+	post_message("Nyx returns to the surface.")
 
 
 func enter_map(map_data: MapData, depth: int) -> void:
@@ -583,6 +620,11 @@ func _try_pickup(cell: Vector2i) -> void:
 		return
 	var g: GroundItem = ground_items[cell]
 	if _gain_item(g.item):
+		for i in current_map.item_spawns.size():
+			var s: Dictionary = current_map.item_spawns[i]
+			if s["pos"] == cell:
+				current_map.item_spawns.remove_at(i)
+				break
 		ground_items.erase(cell)
 		g.queue_free()
 
@@ -706,12 +748,28 @@ func player_interact() -> void:
 		return
 	if _try_flee_ambush():
 		return
+	if current_map.is_threshold and tile_at(player.grid_pos) != "dungeon_entrance":
+		exit_layer()
+		post_message("Nyx retreats from the dungeon's mouth.")
+		return
 	var t := tile_at(player.grid_pos)
 	match t:
 		"stairs_down":
 			busy = true
 			layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
-			enter_map(generate_floor(current_depth + 1), current_depth + 1)
+			var next_map: MapData
+			var inst: Dictionary = dungeon_cache.get(dungeon_instance, {})
+			var floors: Dictionary = inst.get("floors", {})
+			if dungeon_instance != "" and floors.has(current_depth + 1):
+				next_map = floors[current_depth + 1]
+				post_message("The dungeon remembers this floor.")
+			else:
+				next_map = DungeonGenerator.generate_floor(current_depth + 1)
+				if dungeon_instance != "":
+					floors[current_depth + 1] = next_map
+					inst["floors"] = floors
+					dungeon_cache[dungeon_instance] = inst
+			enter_map(next_map, current_depth + 1)
 			post_message("Nyx descends to floor %d." % current_depth)
 			await get_tree().create_timer(0.15).timeout
 			busy = false
@@ -720,13 +778,26 @@ func player_interact() -> void:
 				exit_layer()
 				return
 			busy = true
-			enter_map(generate_floor(current_depth - 1), current_depth - 1)
+			var layer: Dictionary = layer_stack.pop_back()
+			enter_map(layer["map"], layer["depth"])
+			player.grid_pos = layer["return_cell"]
+			player.snap()
 			post_message("Nyx climbs to floor %d." % current_depth)
 			await get_tree().create_timer(0.15).timeout
 			busy = false
 		"dungeon_entrance":
 			busy = true
-			enter_dungeon("res://maps/woods_dungeon.txt")
+			if current_map.is_threshold:
+				# We're in the threshold, standing on the dungeon door: descend.
+				enter_dungeon("res://maps/woods_dungeon.txt", "woods_dungeon")
+				post_message("Nyx enters the woods dungeon.")
+			else:
+				# Overworld entrance: step into the threshold.
+				layer_stack.append({"map": current_map, "depth": current_depth, "return_cell": player.grid_pos})
+				var threshold := AsciiMapLoader.load("res://maps/woods_threshold.txt")
+				threshold.is_threshold = true
+				enter_map(threshold, 0)
+				post_message("Nyx stands before the dungeon's mouth. (Enter anywhere to retreat; the door leads down)")
 			await get_tree().create_timer(0.15).timeout
 			busy = false
 		"town":
@@ -769,7 +840,7 @@ func _render_cell(cell: Vector2i) -> void:
 
 
 func _maybe_travel_encounter() -> void:
-	if current_depth != 0 or current_map.is_ambush:
+	if current_depth != 0 or current_map.is_ambush or current_map.is_threshold:
 		return
 	if randf() > 0.12:
 		return
