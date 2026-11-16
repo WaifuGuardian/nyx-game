@@ -3,8 +3,7 @@ class_name AsciiMapLoader
 
 const TILE_CHARS := {
 	"#": "wall", ".": "floor", "+": "door", ">": "stairs_down", "<": "stairs_up",
-	"p": "plains", "w": "woods", "m": "mountain", "~": "water",
-	"D": "dungeon_entrance", "T": "town",
+	"p": "plains", "w": "woods", "m": "mountain", "~": "water", "T": "town",
 	"=": "chest",
 }
 const ENEMY_CHARS := {"g": "goblin", "a": "archer", "k": "knight", "B": "warchief"}
