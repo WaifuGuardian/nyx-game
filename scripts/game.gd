@@ -1,3 +1,4 @@
+class_name GameState
 extends Node
 ## Autoload "Game": maps, entities, items, skills, time, survival, turns.
 
@@ -54,32 +55,16 @@ func post_message(text: String) -> void:
 	message_posted.emit(text)
 
 
-# --- World clock ------------------------------------------------------------
+# --- Delegated systems (see save_system.gd / time_system.gd) -----------------
 
 func advance_time(minutes: int) -> void:
-	world_minutes += minutes
-	while world_minutes >= 24 * 60:
-		world_minutes -= 24 * 60
-		day += 1
-	if is_instance_valid(player) and player.alive:
-		var was_stage: String = player.hunger_stage()
-		player.hunger = maxf(0.0, player.hunger - minutes * Player.HUNGER_RATE)
-		var now_stage: String = player.hunger_stage()
-		if now_stage != was_stage:
-			post_message(player.hunger_stage_message(now_stage))
-		if player.hunger <= 0.0:
-			player.starve_accumulator += minutes
-			while player.starve_accumulator >= 60 and player.alive:
-				player.starve_accumulator -= 60
-				post_message("Starvation gnaws at Nyx. (-1 HP)")
-				player.take_damage(1)
-	time_passed.emit(minutes)
-
+	TimeSystem.advance_time(self, minutes)
 
 func clock_text() -> String:
-	return "Day %d  %02d:%02d" % [day, world_minutes / 60, world_minutes % 60]
+	return TimeSystem.clock_text(self)
+	
 func _abs_time() -> int:
-	return day * 1440 + world_minutes
+	return TimeSystem.abs_time(self)
 
 func new_game() -> void:
 	player = Player.new()
@@ -223,215 +208,18 @@ func _free_adjacent_cells(center: Vector2i, count: int) -> Array[Vector2i]:
 
 # --- Save / load ---------------------------------------------------------
 
-func has_save() -> bool:
-	return FileAccess.file_exists(SAVE_PATH)
-
-
-func delete_save() -> void:
-	if has_save():
-		DirAccess.remove_absolute(SAVE_PATH)
-
 
 func save_game() -> void:
-	if not is_instance_valid(player):
-		return
-	var data := {
-		"day": day,
-		"minutes": world_minutes,
-		"depth": current_depth,
-		"player": _player_to_dict(),
-		"current_map": _map_to_dict(current_map),
-		"layer_stack": _stack_to_dicts(),
-		"affinity": affinity,
-		"quests": quests,
-		"quests_done": quests_done,
-		"dungeon_cache": _cache_to_dicts(),
-		"dungeon_instance": dungeon_instance,
-	}
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-	if f == null:
-		push_error("save failed")
-		return
-	f.store_string(JSON.stringify(data, "\t"))
-	f.close()
-	post_message("(Game saved.)")
-
+	SaveSystem.save_game(self)
 
 func load_game() -> void:
-	if busy:
-		return
-	if not has_save():
-		post_message("No save to load.")
-		return
-	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
-	var data: Dictionary = JSON.parse_string(f.get_as_text())
-	f.close()
-	if data == null:
-		push_error("save file corrupt")
-		return
-	if not is_instance_valid(player) or not player.alive:
-		player = Player.new()
-		player.color = Color(0.9, 0.9, 1.0)
-		_register(player)
-	day = int(data["day"])
-	world_minutes = int(data["minutes"])
-	affinity = data.get("affinity", {})     # <- add this line
-	quests = {}
-	for k in data.get("quests", {}):
-		quests[k] = int(data["quests"][k])
-	quests_done = []
-	for q in data.get("quests_done", []):
-		quests_done.append(q)
-	_cache_from_dicts(data.get("dungeon_cache", {}))
-	dungeon_instance = data.get("dungeon_instance", "")
-	layer_stack = _stack_from_dicts(data["layer_stack"])
-	enter_map(_dict_to_map(data["current_map"]), int(data["depth"]))
-	_player_from_dict(data["player"])
-	post_message("The world returns to Nyx, as she left it.")
+	SaveSystem.load_game(self)
 
+func has_save() -> bool:
+	return SaveSystem.has_save()
 
-func _item_to_dict(it: Item) -> Dictionary:
-	return {"id": it.id, "quality": it.quality, "count": it.count}
-
-
-func _map_to_dict(m: MapData) -> Dictionary:
-	var tiles := {}
-	for c in m.tiles:
-		tiles["%d,%d" % [c.x, c.y]] = m.tiles[c]
-	var enemies := []
-	for e in entities:
-		if is_instance_valid(e) and e != player and e is Enemy:
-			enemies.append({"pos": [e.grid_pos.x, e.grid_pos.y], "id": e.def["id"]})
-	var npcs := []
-	for s in m.npc_spawns:
-		npcs.append({"pos": [s["pos"].x, s["pos"].y], "id": s["id"]})
-	var dungeons := []
-	for e in m.dungeon_entrances:
-		dungeons.append({"pos": [e["pos"].x, e["pos"].y], "id": e["dungeon_id"]})
-	var items := []
-	for cell in ground_items:
-		var g: GroundItem = ground_items[cell]
-		var d: Dictionary = _item_to_dict(g.item)
-		d["pos"] = [cell.x, cell.y]
-		items.append(d)
-	return {
-		"size": [m.size.x, m.size.y],
-		"tiles": tiles,
-		"player_spawn": [m.player_spawn.x, m.player_spawn.y],
-		"enemy_spawns": enemies,
-		"npc_spawns": npcs,
-		"item_spawns": items,
-		"is_ambush": m.is_ambush,
-		"dungeon_entrances": dungeons,
-	}
-
-
-func _dict_to_map(d: Dictionary) -> MapData:
-	var m := MapData.new()
-	m.size = Vector2i(int(d["size"][0]), int(d["size"][1]))
-	for k in d["tiles"]:
-		var parts := (k as String).split(",")
-		m.tiles[Vector2i(int(parts[0]), int(parts[1]))] = d["tiles"][k]
-	var ps: Array = d["player_spawn"]
-	m.player_spawn = Vector2i(int(ps[0]), int(ps[1]))
-	m.is_ambush = d.get("is_ambush", false)
-	for s in d["enemy_spawns"]:
-		m.enemy_spawns.append({"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])), "id": s["id"]})
-	for s in d.get("npc_spawns", []):
-		m.npc_spawns.append({"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])), "id": s["id"]})
-	for s in d.get("dungeon_entrances", []):
-		m.dungeon_entrances.append({
-			"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])),
-			"dungeon_id": s["dungeon_id"],
-		})
-	for s in d["item_spawns"]:
-		m.item_spawns.append({
-			"pos": Vector2i(int(s["pos"][0]), int(s["pos"][1])),
-			"id": s["id"], "quality": int(s["quality"]), "count": int(s["count"])})
-	return m
-
-
-func _player_to_dict() -> Dictionary:
-	var equipped_dict := {}
-	for slot in player.equipped:
-		equipped_dict[slot] = _item_to_dict(player.equipped[slot])
-	return {
-		"grid_pos": [player.grid_pos.x, player.grid_pos.y],
-		"level": player.level, "xp": player.xp,
-		"hp": player.hp, "stamina": player.stamina, "mana": player.mana,
-		"hunger": player.hunger, "gold": player.gold,
-		"attributes": player.attributes,
-		"inventory": player.inventory.map(_item_to_dict),
-		"equipped": equipped_dict,
-		"hotbar": player.hotbar,
-	}
-
-
-func _player_from_dict(d: Dictionary) -> void:
-	player.level = int(d["level"])
-	player.xp = int(d["xp"])
-	var attrs: Dictionary = {}
-	for k in d["attributes"]:
-		attrs[k] = int(d["attributes"][k])
-	player.attributes = attrs
-	player.hunger = float(d["hunger"])
-	player.stamina = float(d["stamina"])
-	player.mana = float(d["mana"])
-	player.gold = int(d.get("gold", 50))
-	player.hp = int(d["hp"])
-	player.inventory.clear()
-	for itd in d["inventory"]:
-		player.inventory.append(ItemDB.make(itd["id"], int(itd["quality"]), int(itd["count"])))
-	player.equipped.clear()
-	for slot in d["equipped"]:
-		var itd: Dictionary = d["equipped"][slot]
-		player.equipped[slot] = ItemDB.make(itd["id"], int(itd["quality"]), int(itd["count"]))
-	player.hotbar.clear()
-	for slot in d.get("hotbar", []):
-		player.hotbar.append(slot)
-	player.grid_pos = Vector2i(int(d["grid_pos"][0]), int(d["grid_pos"][1]))
-	player.snap()
-
-
-func _stack_to_dicts() -> Array:
-	var out := []
-	for layer in layer_stack:
-		out.append({
-			"map": _map_to_dict(layer["map"]),
-			"depth": layer["depth"],
-			"return_cell": [layer["return_cell"].x, layer["return_cell"].y],
-		})
-	return out
-
-
-func _stack_from_dicts(arr: Array) -> Array:
-	var out := []
-	for layer in arr:
-		out.append({
-			"map": _dict_to_map(layer["map"]),
-			"depth": int(layer["depth"]),
-			"return_cell": Vector2i(int(layer["return_cell"][0]), int(layer["return_cell"][1])),
-		})
-	return out
-
-func _cache_to_dicts() -> Dictionary:
-	var out := {}
-	for id in dungeon_cache:
-		var floors := {}
-		for depth in dungeon_cache[id]["floors"]:
-			floors[str(depth)] = _map_to_dict(dungeon_cache[id]["floors"][depth])
-		out[id] = {"floors": floors, "stamp": dungeon_cache[id]["stamp"]}
-	return out
-
-
-func _cache_from_dicts(d: Dictionary) -> void:
-	dungeon_cache = {}
-	for id in d:
-		var floors := {}
-		for depth in d[id]["floors"]:
-			floors[int(depth)] = _dict_to_map(d[id]["floors"][depth])
-		dungeon_cache[id] = {"floors": floors, "stamp": int(d[id]["stamp"])}
-
+func delete_save() -> void:
+	SaveSystem.delete_save()
 
 # --- Map handling ---------------------------------------------------------
 
@@ -545,10 +333,6 @@ func _dungeon_id_at(cell: Vector2i) -> String:
 
 func is_walkable(cell: Vector2i) -> bool:
 	return WALKABLE.has(tile_at(cell))
-
-
-func generate_floor(depth: int) -> MapData:
-	return DungeonGenerator.generate_floor(depth)
 
 func random_open_cell(map_data: MapData) -> Vector2i:
 	for i in 200:
@@ -987,7 +771,7 @@ func player_rest() -> void:
 		var interrupt_chance := 0.005 if tile_at(player.grid_pos) == "campfire" else 0.03
 		if randf() < interrupt_chance:
 			post_message("Nyx is roused by a sound in the night!")
-			_spawn_rest_ambush()
+			_start_ambush()
 			interrupted = true
 		await get_tree().create_timer(0.02).timeout
 	if not interrupted and is_instance_valid(player) and player.alive:
@@ -996,11 +780,6 @@ func player_rest() -> void:
 	elif is_instance_valid(player) and player.alive:
 		post_message("The rest is broken off.")
 	busy = false
-
-
-func _spawn_rest_ambush() -> void:
-	_start_ambush()
-
 
 func player_guard() -> void:
 	if busy or not is_instance_valid(player) or not player.alive:

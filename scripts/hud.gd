@@ -8,7 +8,6 @@ var equip_label: Label
 var hotbar_label: Label
 var inv_label: Label
 var log_label: Label
-var _last_msg := ""
 var quests_label: Label
 
 
@@ -34,7 +33,6 @@ func _ready() -> void:
 	vbox.add_child(hotbar_label)
 	vbox.add_child(inv_label)
 	vbox.add_child(log_label)
-	Game.message_posted.connect(func(text: String) -> void: _last_msg = text)
 	Game.dialogue_ui = DialogueUi.new()
 	add_child(Game.dialogue_ui)
 	Game.shop_ui = ShopUi.new()

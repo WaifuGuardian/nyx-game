@@ -51,9 +51,9 @@ func open(npc_name: String, dialogue_lines: Array) -> void:
 
 ## Open a node with choices (new style).
 func open_node(v: Villager, node: Dictionary) -> void:
-	_begin(v.display_name)
-	villager = v
-	_enter_node(node)
+	show_node(v, node)
+
+
 func show_node(v: Villager, node: Dictionary) -> void:
 	_begin(v.display_name)
 	villager = v
