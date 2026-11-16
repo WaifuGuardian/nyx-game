@@ -13,7 +13,6 @@ const WALKABLE: Array[String] = ["floor", "door", "stairs_down", "stairs_up",
 const SLOW_TILES: Array[String] = ["woods", "plains"]
 const BASE_HIT := 75
 const CRIT_DIVISOR := 3  # LUCK / this = crit chance %
-const SAVE_PATH := "user://savegame.json"
 const LORE_LINES: Array[String] = [
 	"\"...the woods breathe when the bell rings. Count the breaths.\"",
 	"Scratched into the stone: \"DEEPER = RICHER. ALSO DEADLIER. - a previous delve\"",
@@ -556,7 +555,6 @@ func _check_special_tiles() -> void:
 			if current_map.is_threshold:
 				post_message("The door hums with cold air. (Enter to descend)")
 			else:
-				var hint := ""
 				var inst: Dictionary = dungeon_cache.get(_dungeon_id_at(player.grid_pos), {})
 				if inst.is_empty():
 					post_message("A dark maw opens in the hillside. What waits below is undecided. (Enter to approach)")
