@@ -144,6 +144,7 @@ static func attack(g: GameState, a: Entity, t: Entity) -> void:
 	if randi_range(0, 99) < chance:
 		var raw := randi_range(1, a.attack_power())
 		var dmg := maxi(1, raw - t.defense())
+		dmg = maxi(dmg, int(ceil(raw * 0.4)))   # mitigation floor: armor eats at most 60%
 		if randi_range(0, 99) < int(a.attributes.get("LUCK", 10)) / CRIT_DIVISOR:
 			dmg *= 2
 			g.post_message("CRITICAL! %s tears into the %s for %d!" % [a.display_name, t.display_name, dmg])

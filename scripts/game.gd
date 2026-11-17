@@ -675,7 +675,7 @@ func player_rest() -> void:
 		player.hp = mini(player.hp + maxi(1, player.max_hp() / chunks), player.max_hp())
 		player.mana = minf(player.mana + player.max_mana() / float(chunks), player.max_mana())
 		player.stamina = minf(player.stamina + 100.0 / float(chunks), 100.0)
-		var interrupt_chance := 0.005 if tile_at(player.grid_pos) == "campfire" else 0.03
+		var interrupt_chance := 0.0 if tile_at(player.grid_pos) == "campfire" else 0.01
 		if randf() < interrupt_chance:
 			post_message("Nyx is roused by a sound in the night!")
 			_start_ambush()
@@ -784,16 +784,41 @@ func _dialogue_effect(v: Villager, option: Dictionary) -> void:
 		_:
 			dialogue_ui._show_lines(["..."], "root")
 
+func _affinity_tier_name(value: int) -> String:
+	if value < -20:
+		return "hostile"
+	if value < 0:
+		return "cold"
+	if value < 20:
+		return "neutral"
+	if value < 50:
+		return "warm"
+	if value < 80:
+		return "friendly"
+	return "devoted"
 
 func _flirt(v: Villager) -> void:
 	var aff: int = get_affinity(v.npc_id)
 	var chance: int = clampi(40 + player.attributes["CHA"] * 2 + aff / 4, 5, 95)
+	var before: int = aff / 20   # tier before
 	if randi_range(0, 99) < chance:
 		_add_affinity(v.npc_id, 3)
-		dialogue_ui._show_lines([_flirt_success_line(aff)], "root")
+		var after: int = get_affinity(v.npc_id) / 20
+		var line: String = _flirt_success_line(aff)
+		if after > before:
+			line += "\nYour bond deepens. (%s)" % _affinity_tier_name(get_affinity(v.npc_id))
+		else:
+			line += "\n(Affinity +3)"
+		dialogue_ui._show_lines([line], "root")
 	else:
 		_add_affinity(v.npc_id, -2)
-		dialogue_ui._show_lines([_flirt_fail_line(aff)], "root")
+		var after2: int = get_affinity(v.npc_id) / 20
+		var line2: String = _flirt_fail_line(aff)
+		if after2 < before:
+			line2 += "\nThat landed badly. (Affinity -2)"
+		else:
+			line2 += "\n(Affinity -2)"
+		dialogue_ui._show_lines([line2], "root")
 
 
 func _flirt_success_line(aff: int) -> String:

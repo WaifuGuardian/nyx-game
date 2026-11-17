@@ -3,7 +3,7 @@ extends Entity
 
 const MAX_INVENTORY := 10
 const XP_PER_LEVEL := 40
-const HUNGER_RATE := 100.0 / 2880.0
+const HUNGER_RATE := 100.0 / 5760.0
 const STARVING_THRESHOLD := 15.0
 
 var inventory: Array[Item] = []

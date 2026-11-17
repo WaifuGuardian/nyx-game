@@ -24,12 +24,12 @@ const DEFS: Dictionary = {
 		"color": Color(0.95, 0.75, 0.4),
 	},
 	"sword": {
-		"name": "Sword", "kind": "weapon", "atk": 3,
+		"name": "Sword", "kind": "weapon", "atk": 3, "slot": "weapon",
 		"value": 150, "weight": 20, "stack": false,
 		"color": Color(0.75, 0.78, 0.85),
 	},
 	"armor_leather": {
-		"name": "Leather Armor", "kind": "armor", "def": 2,
+		"name": "Leather Armor", "kind": "armor", "def": 2, "slot": "chest",
 		"value": 100, "weight": 15, "stack": false,
 		"color": Color(0.55, 0.4, 0.25),
 	},

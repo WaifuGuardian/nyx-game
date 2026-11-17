@@ -11,9 +11,18 @@ var doll_chest: TextureRect
 var doll: Control
 var doll_legs_slot: Button
 var doll_chest_slot: Button
-var attr_label: Label
+var attr_box: VBoxContainer
 var derived_label: Label
-
+const ATTR_HELP := {
+	"STR": "Strength — melee damage and carry capacity. Every 4 points: +1 attack power.",
+	"CON": "Constitution — health, stamina, and toughness. Every point: +2 max HP. Every 5: +1 defense.",
+	"DEX": "Dexterity — accuracy, evasion, and turn speed. Faster hands, harder to hit.",
+	"PER": "Perception — sight radius, spotting, and ranged aim (when ranged arrives).",
+	"WIL": "Will — mana pool and resistance to mental effects. Every point: +2 max mana.",
+	"MAG": "Magic — spell power and what spells you can cast. (Spells coming soon.)",
+	"LUCK": "Luck — critical hit chance and loot fortune. Every 3 points: +1% crit.",
+	"CHA": "Charisma — flirting, bartering, recruitment, and first impressions.",
+}
 const ATTR_ORDER: Array[String] = ["STR", "CON", "DEX", "PER", "WIL", "MAG", "LUCK", "CHA"]
 const ATTR_NAMES := {"STR": "Strength", "CON": "Constitution", "DEX": "Dexterity",
 	"PER": "Perception", "WIL": "Will", "MAG": "Magic", "LUCK": "Luck", "CHA": "Charisma"}
@@ -28,6 +37,7 @@ func _ready() -> void:
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 16)
 	panel.add_child(hbox)
+	
 
 	# --- Left: the layered paper doll ---
 	var left := VBoxContainer.new()
@@ -67,8 +77,8 @@ func _ready() -> void:
 	# --- Right: attributes + derived ---
 	var right := VBoxContainer.new()
 	hbox.add_child(right)
-	attr_label = Label.new()
-	right.add_child(attr_label)
+	attr_box = VBoxContainer.new()
+	right.add_child(attr_box)
 	derived_label = Label.new()
 	derived_label.custom_minimum_size = Vector2(190, 0)
 	right.add_child(derived_label)
@@ -149,10 +159,14 @@ func _refresh() -> void:
 	_fill_slot(doll_chest_slot, p.equipped.get("chest"), "chest")
 	_fill_slot(doll_legs_slot, p.equipped.get("legs"), "legs")
 	# --- Attributes ---
-	var lines: Array[String] = []
+	for c in attr_box.get_children():
+		c.queue_free()
 	for key in ATTR_ORDER:
-		lines.append("%s  %d" % [ATTR_NAMES[key], p.attributes[key]])
-	attr_label.text = "\n".join(lines)
+		var row := Label.new()
+		row.text = "%s  %d" % [ATTR_NAMES[key], p.attributes[key]]
+		row.tooltip_text = ATTR_HELP[key]
+		row.mouse_filter = Control.MOUSE_FILTER_STOP
+		attr_box.add_child(row)
 	# --- Derived combat block ---
 	derived_label.text = "ATK %d\nDEF %d\nACC %d\nEVA %d\nSPD %d\nCarry %d/%d\nHunger %d (%s)\nGold %d" % [
 		p.attack_power(), p.defense(), p.accuracy(), p.evasion(), p.speed(),
