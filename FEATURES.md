@@ -61,7 +61,10 @@
 ## Loader (map_loader_ascii.gd):
 - TILE_CHARS (NO "D" — it lives in DUNGEON_CHARS, elif order matters!)
 - ENEMY/NPC/ITEM/DUNGEON_CHARS tables; ragged-line wall padding
-
+## Draw order (2D/UI):
+- Children draw in tree order; LATER children draw ON TOP
+- Background images: add_child BEFORE the UI elements that sit on them
+- Veils/overlays: between the image and the UI
 ## Keys (player.gd):
 - Arrows 8-dir, 1-9 hotbar, G guard, X wait, R rest, M meditate,
   Enter interact, I pack, C character, Ctrl+S save, Ctrl+L load,

@@ -170,6 +170,8 @@ static func _player_from_dict(g: GameState, d: Dictionary) -> void:
 	g.player.hotbar.clear()
 	for slot in d.get("hotbar", []):
 		g.player.hotbar.append(slot)
+	while g.player.hotbar.size() < 10:   # <- add: old saves had 9 slots
+		g.player.hotbar.append({"kind": "none", "id": ""})
 	g.player.grid_pos = Vector2i(int(d["grid_pos"][0]), int(d["grid_pos"][1]))
 	g.player.snap()
 

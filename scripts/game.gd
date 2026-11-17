@@ -44,6 +44,7 @@ var quests_done: Array[String] = []
 var dungeon_cache: Dictionary = {}   # instance_id -> {"floors": {depth: MapData}, "stamp": int}
 var dungeon_instance := ""           # id of the dungeon we're currently inside ("" = surface)
 var _fast := false   # true while the enemy phase resolves: minimal animation waits
+var boot_mode := ""   # "new" or "load" — set by the main menu before the game scene loads
 
 func post_message(text: String) -> void:
 	message_log.append(text)

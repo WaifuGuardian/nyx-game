@@ -43,6 +43,8 @@ func _ready() -> void:
 	var sheet := CharacterSheet.new()
 	add_child(sheet)
 	add_child(hotbar)
+	var pause := PauseMenu.new()
+	add_child(pause)
 
 
 func _process(_delta: float) -> void:
