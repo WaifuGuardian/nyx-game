@@ -11,5 +11,7 @@ func _ready() -> void:
 
 
 func _draw() -> void:
+	var unit := Game.TILE / 16.0
+	var s := 6.0 * unit
 	draw_rect(Rect2(-3, -3, 6, 6), item.color())
 	draw_rect(Rect2(-3, -3, 6, 6), Color(0, 0, 0, 0.6), false, 1.0)

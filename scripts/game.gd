@@ -2,11 +2,33 @@ class_name GameState
 extends Node
 ## Autoload "Game": maps, entities, items, skills, time, survival, turns.
 
-const TILE := 16
-const TILE_ATLAS := {"floor": 0, "wall": 1, "door": 2, "stairs_down": 3, "stairs_up": 4,
-	"grass": 0, "plains": 5, "woods": 6, "mountain": 7, "water": 8, "dungeon_entrance": 9,
-	"town": 10, "chest": 11, "chest_open": 12, "campfire": 13, "water_floor": 14,
-	"lore_tablet": 15,  "vault_door": 16, "vault_open": 17}
+const TILE := 32
+const DUNGEON_STRIP_TILES := 12
+## tile id -> [source_id, atlas_coords]
+## source 0 = OGA town sheet (art/tiles/pathandobjects.png)
+## source 1 = procedural dungeon strip
+const TILE_MAP := {
+	# --- outdoors: source 0 = the OGA sheet (32px) ---
+	"grass": [0, Vector2i(1, 11)],        # ← REPLACE with your coords
+	"plains": [0, Vector2i(1, 11)],       # ← REPLACE
+	"road_cobble": [0, Vector2i(4, 6)],  # ← REPLACE
+	"road_dirt": [0, Vector2i(7, 6)],    # ← REPLACE
+	"water": [0, Vector2i(3, 10)],        # ← REPLACE
+	# --- dungeon: source 1 = procedural strip ---
+	"floor": [1, Vector2i(0, 0)],
+	"wall": [1, Vector2i(1, 0)],
+	"door": [1, Vector2i(2, 0)],
+	"stairs_down": [1, Vector2i(3, 0)],
+	"stairs_up": [1, Vector2i(4, 0)],
+	"chest": [1, Vector2i(11, 0)],
+	"chest_open": [1, Vector2i(12, 0)],
+	"campfire": [1, Vector2i(13, 0)],
+	"water_floor": [1, Vector2i(14, 0)],
+	"lore_tablet": [1, Vector2i(15, 0)],
+	"vault_door": [1, Vector2i(16, 0)],
+	"vault_open": [1, Vector2i(17, 0)],
+}
+
 const WALKABLE: Array[String] = ["floor", "door", "stairs_down", "stairs_up",
 	"grass", "plains", "woods", "dungeon_entrance", "town",
 	"campfire", "water_floor", "lore_tablet"]
@@ -276,7 +298,8 @@ func _render_map(map_data: MapData) -> void:
 	add_child(map)
 	for cell in map_data.tiles:
 		var id: String = map_data.tiles[cell]
-		map.set_cell(cell, 0, Vector2i(TILE_ATLAS.get(id, 0), 0))   # .get with default
+		var entry: Array = TILE_MAP.get(id, [0, Vector2i.ZERO])
+		map.set_cell(cell, entry[0], entry[1])
 
 
 func tile_at(cell: Vector2i) -> String:
@@ -293,60 +316,50 @@ func is_walkable(cell: Vector2i) -> bool:
 func _make_tileset() -> TileSet:
 	var ts := TileSet.new()
 	ts.tile_size = Vector2i(TILE, TILE)
-	ts.add_custom_data_layer()
-	ts.set_custom_data_layer_name(0, "walkable")
-	ts.set_custom_data_layer_type(0, TYPE_BOOL)
-	var src := TileSetAtlasSource.new()
-	src.texture = _make_tiles_texture()
-	src.texture_region_size = Vector2i(TILE, TILE)
-	for i in TILE_ATLAS.size():
-		src.create_tile(Vector2i(i, 0))
-	ts.add_source(src, 0)
-	for id in TILE_ATLAS:
-		var td := src.get_tile_data(Vector2i(TILE_ATLAS[id], 0), 0)
-		td.set_custom_data("walkable", WALKABLE.has(id))
+	var sheet := TileSetAtlasSource.new()
+	sheet.texture = load("res://art/tiles/pathandobjects.png")   # the OGA sheet
+	sheet.texture_region_size = Vector2i(TILE, TILE)
+	ts.add_source(sheet, 0)                     # source 0 = outdoors
+	var strip := TileSetAtlasSource.new()
+	strip.texture = _make_tiles_texture()       # procedural dungeon strip
+	strip.texture_region_size = Vector2i(TILE, TILE)
+	ts.add_source(strip, 1)                     # source 1 = dungeon
+	for id in TILE_MAP:
+		var src: int = TILE_MAP[id][0]
+		var coords: Vector2i = TILE_MAP[id][1]
+		var source := ts.get_source(src)
+		if source.get_tile_at_coords(coords) == Vector2i(-1, -1):
+			source.create_tile(coords)
 	return ts
 
 
 func _make_tiles_texture() -> ImageTexture:
-	var n := TILE_ATLAS.size()
+	var n := DUNGEON_STRIP_TILES
 	var img := Image.create_empty(n * TILE, TILE, false, Image.FORMAT_RGB8)
 	for i in n:
 		for x in TILE:
 			for y in TILE:
 				var base := Color(0.3, 0.3, 0.34)
 				match i:
-					0, 5: base = Color(0.42, 0.52, 0.3) if (x + y) % 3 == 0 else Color(0.38, 0.48, 0.27)
-					1: base = Color(0.18, 0.18, 0.2) if (x + y) % 2 == 0 else Color(0.15, 0.15, 0.17)
-					2: base = Color(0.4, 0.28, 0.15) if x < 2 or x > TILE - 3 else Color(0.5, 0.38, 0.2)
-					3: base = Color(0.25, 0.25, 0.28) if (x + y) % 2 == 0 else Color(0.22, 0.22, 0.25)
-					4: base = Color(0.4, 0.4, 0.44) if (x + y) % 2 == 0 else Color(0.37, 0.37, 0.41)
-					6: base = Color(0.2, 0.38, 0.2) if (x * y) % 5 != 0 else Color(0.16, 0.3, 0.16)
-					7: base = Color(0.45, 0.42, 0.4) if (x + y) % 4 != 0 else Color(0.36, 0.34, 0.33)
-					8: base = Color(0.2, 0.35, 0.55) if (x + y) % 2 == 0 else Color(0.18, 0.31, 0.5)
-					9: base = Color(0.1, 0.1, 0.12)
-					10: base = Color(0.55, 0.4, 0.35) if (x + y) % 3 != 0 else Color(0.48, 0.35, 0.3)
-					11: base = Color(0.45, 0.32, 0.15) if y < 3 or y > TILE - 4 else Color(0.65, 0.5, 0.2)
-					12: base = Color(0.3, 0.22, 0.1) if y < 5 else Color(0.2, 0.15, 0.08)
-					13: base = Color(0.35, 0.2, 0.1) if (x + y) % 4 != 0 else Color(0.9, 0.5, 0.1)  # campfire: dark ring, flame flecks
-					14: base = Color(0.25, 0.35, 0.5) if (x + y) % 2 == 0 else Color(0.22, 0.31, 0.45)  # dungeon water
-					15: base = Color(0.4, 0.42, 0.45) if y % 4 != 0 else Color(0.28, 0.3, 0.33)  # etched tablet
-					16: base = Color(0.2, 0.2, 0.24) if y < 3 or y > TILE - 4 else Color(0.3, 0.28, 0.3)
-					17: base = Color(0.12, 0.12, 0.14) if y < 5 else Color(0.2, 0.18, 0.16)
+					0: base = Color(0.42, 0.52, 0.3) if (x + y) % 3 == 0 else Color(0.38, 0.48, 0.27)   # floor
+					1: base = Color(0.18, 0.18, 0.2) if (x + y) % 2 == 0 else Color(0.15, 0.15, 0.17)   # wall
+					2: base = Color(0.4, 0.28, 0.15) if x < 2 or x > TILE - 3 else Color(0.5, 0.38, 0.2)  # door
+					3: base = Color(0.25, 0.25, 0.28) if (x + y) % 2 == 0 else Color(0.22, 0.22, 0.25)  # stairs_down
+					4: base = Color(0.4, 0.4, 0.44) if (x + y) % 2 == 0 else Color(0.37, 0.37, 0.41)    # stairs_up
+					5: base = Color(0.45, 0.32, 0.15) if y < 3 or y > TILE - 4 else Color(0.65, 0.5, 0.2)   # chest
+					6: base = Color(0.3, 0.22, 0.1) if y < 5 else Color(0.2, 0.15, 0.08)                # chest_open
+					7: base = Color(0.35, 0.2, 0.1) if (x + y) % 4 != 0 else Color(0.9, 0.5, 0.1)       # campfire
+					8: base = Color(0.25, 0.35, 0.5) if (x + y) % 2 == 0 else Color(0.22, 0.31, 0.45)   # water_floor
+					9: base = Color(0.4, 0.42, 0.45) if y % 4 != 0 else Color(0.28, 0.3, 0.33)          # lore_tablet
+					10: base = Color(0.2, 0.2, 0.24) if y < 3 or y > TILE - 4 else Color(0.3, 0.28, 0.3)  # vault_door
+					11: base = Color(0.12, 0.12, 0.14) if y < 5 else Color(0.2, 0.18, 0.16)             # vault_open
 				img.set_pixel(i * TILE + x, y, base)
-	for x in range(4, 12):
-		img.set_pixel(3 * TILE + x, 7, Color(0.7, 0.7, 0.75))
-		img.set_pixel(4 * TILE + x, 7, Color(0.9, 0.9, 0.95))
-	for x in range(3, 13):
-		img.set_pixel(9 * TILE + x, 2, Color(0.85, 0.85, 0.9))
-	for x in range(5, 11):
-		img.set_pixel(10 * TILE + x, 4, Color(0.75, 0.3, 0.25))
-	# chest gold band
+	# chest gold band (tile 5)
 	for x in range(2, 14):
-		img.set_pixel(11 * TILE + x, 7, Color(0.9, 0.8, 0.3))
-	# vault door keyhole
+		img.set_pixel(5 * TILE + x, 7, Color(0.9, 0.8, 0.3))
+	# vault door keyhole (tile 10)
 	for x in range(6, 10):
-		img.set_pixel(16 * TILE + x, 7, Color(0.9, 0.8, 0.3))
+		img.set_pixel(10 * TILE + x, 7, Color(0.9, 0.8, 0.3))
 	return ImageTexture.create_from_image(img)
 
 
@@ -646,7 +659,8 @@ func _open_chest() -> void:
 		_spawn_ground_item(item, player.grid_pos)
 
 func _render_cell(cell: Vector2i) -> void:
-	map.set_cell(cell, 0, Vector2i(TILE_ATLAS[tile_at(cell)], 0))
+	var entry: Array = TILE_MAP.get(tile_at(cell), [0, Vector2i.ZERO])
+	map.set_cell(cell, entry[0], entry[1])
 
 # --- Rest ------------------------------------------------------------------
 

@@ -11,7 +11,7 @@ func _ready() -> void:
 		Game.new_game()
 	Game.boot_mode = ""
 	cam = Camera2D.new()
-	cam.zoom = Vector2(6, 6)
+	cam.zoom = Vector2(3, 3)
 	add_child(cam)
 	cam.make_current()
 

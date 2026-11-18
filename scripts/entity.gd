@@ -140,6 +140,7 @@ func die() -> void:
 
 
 func _draw() -> void:
+	var unit := Game.TILE / 16.0
 	var radius := 5.0 * token_size
 	var center := Vector2.ZERO
 	# Grounding shadow: squashed dark ellipse under the token.
